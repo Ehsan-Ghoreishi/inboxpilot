@@ -9,11 +9,16 @@ fixed lookup table here, so routing stays a single, auditable place
 independent of whatever the model happened to suggest.
 """
 
+from dataclasses import dataclass
 from enum import Enum
 
-from app.agents.email_analyzer import analyze
+from app.agents.email_analyzer import PROMPT_VERSION, analyze
 from app.config import Settings
+from app.database.models import ActionType
 from app.schemas.email import Email, EmailAnalysis, EmailCategory
+from app.services.actions import create_pending_action
+from app.services.classifications import record_classification
+from app.workflows.filters import should_process
 
 
 class TriageStatus(str, Enum):
@@ -31,6 +36,14 @@ _CATEGORY_TO_STATUS: dict[EmailCategory, TriageStatus] = {
     EmailCategory.ASSESSMENT_DEADLINE: TriageStatus.CREATE_EVENT,
     EmailCategory.REJECTION: TriageStatus.NONE,
     EmailCategory.OTHER: TriageStatus.NONE,
+}
+
+# The only action each routed status may propose. NEEDS_REVIEW proposes
+# nothing: the email is just shown, classified, for a human to look at.
+_STATUS_TO_ACTION_TYPE: dict[TriageStatus, ActionType] = {
+    TriageStatus.NONE: ActionType.ARCHIVE,
+    TriageStatus.DRAFT_REPLY: ActionType.DRAFT_REPLY,
+    TriageStatus.CREATE_EVENT: ActionType.CREATE_EVENT,
 }
 
 
@@ -51,3 +64,32 @@ def route(analysis: EmailAnalysis, settings: Settings) -> TriageStatus:
         return TriageStatus.NEEDS_REVIEW
     return _CATEGORY_TO_STATUS[analysis.category]
 
+
+@dataclass(frozen=True)
+class TriageResult:
+    analysis: EmailAnalysis
+    status: TriageStatus
+    pending_action_id: int | None
+
+
+def process_email(email: Email, settings: Settings) -> TriageResult | None:
+    """Classify `email`, record the classification, and propose at most one
+    pending action. Returns `None` if the processing-mode filter skips it.
+
+    Never executes anything: a proposed action only runs when a human
+    approves it via `app.services.actions.approve()`.
+    """
+    if not should_process(email, settings):
+        return None
+
+    analysis = classify(email)
+    record_classification(
+        email, analysis, model=settings.openai_model, prompt_version=PROMPT_VERSION
+    )
+    status = route(analysis, settings)
+    action_type = _STATUS_TO_ACTION_TYPE.get(status)
+    if action_type is None:
+        return TriageResult(analysis, status, pending_action_id=None)
+
+    pending_action = create_pending_action(email, analysis, action_type)
+    return TriageResult(analysis, status, pending_action_id=pending_action.id)
