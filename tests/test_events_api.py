@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,6 +40,20 @@ def client():
     from app.main import app
 
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def mock_db_persistence():
+    """This file is pure unit tests — no real database.
+
+    The endpoint's actual DB write (and its idempotency) is exercised for
+    real against a test Postgres in tests/integration/test_events_api_db.py.
+    Here we just stub it out so these tests stay fast and DB-free, while
+    still letting us assert the endpoint *tried* to persist the right
+    thing.
+    """
+    with patch("app.api.events._persist_to_db") as mock_persist:
+        yield mock_persist
 
 
 SAMPLE_EVENT = {
@@ -97,7 +112,9 @@ def test_get_events_without_challenge_is_rejected(client):
 # --- POST /events (notification delivery) -------------------------------------
 
 
-def test_post_events_valid_signature_stores_event_and_returns_200(client, tmp_path):
+def test_post_events_valid_signature_stores_event_and_returns_200(
+    client, tmp_path, mock_db_persistence
+):
     body = json.dumps(SAMPLE_EVENT).encode("utf-8")
 
     response = _signed_post(client, body)
@@ -105,12 +122,21 @@ def test_post_events_valid_signature_stores_event_and_returns_200(client, tmp_pa
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
+    mock_db_persistence.assert_called_once_with("evt-123", SAMPLE_EVENT)
+
     stored_path = tmp_path / "requests" / "events" / "evt-123.json"
     assert stored_path.exists()
     assert json.loads(stored_path.read_text()) == SAMPLE_EVENT
 
 
-def test_post_events_duplicate_delivery_is_idempotent(client, tmp_path):
+def test_post_events_duplicate_delivery_does_not_error_and_dedupes_the_file(
+    client, tmp_path
+):
+    # Real DB-level idempotency (same event_id twice -> one row) is
+    # exercised against a real database in
+    # tests/integration/test_repository.py; here we just confirm the API
+    # doesn't error on a repeat delivery and the optional file dump stays
+    # deduplicated by filename.
     body = json.dumps(SAMPLE_EVENT).encode("utf-8")
 
     first = _signed_post(client, body)
@@ -124,7 +150,7 @@ def test_post_events_duplicate_delivery_is_idempotent(client, tmp_path):
 
 
 def test_post_events_invalid_signature_returns_401_and_stores_nothing(
-    client, tmp_path
+    client, tmp_path, mock_db_persistence
 ):
     body = json.dumps(SAMPLE_EVENT).encode("utf-8")
 
@@ -132,6 +158,7 @@ def test_post_events_invalid_signature_returns_401_and_stores_nothing(
 
     assert response.status_code == 401
     assert not (tmp_path / "requests").exists()
+    mock_db_persistence.assert_not_called()
 
 
 def test_post_events_missing_signature_header_returns_401(client):

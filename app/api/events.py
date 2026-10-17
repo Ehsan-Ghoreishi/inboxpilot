@@ -7,11 +7,18 @@ signed with `X-Nylas-Signature` over the exact raw body.
 """
 
 import json
+import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.concurrency import run_in_threadpool
 
+from app.config import get_settings
+from app.database.repository import save_raw_event
+from app.database.session import session_scope
 from app.integrations.nylas.webhooks import store_raw_event, verify_webhook_signature
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -22,13 +29,22 @@ def verify_webhook(challenge: str) -> PlainTextResponse:
     return PlainTextResponse(challenge)
 
 
+def _persist_to_db(event_id: str, event: dict) -> None:
+    """Blocking DB write, run off the event loop (sync SQLAlchemy engine)."""
+    with session_scope() as session:
+        save_raw_event(session, event_id, event)
+
+
 @router.post("/events")
 async def receive_event(request: Request) -> JSONResponse:
     """Receive a Nylas webhook notification.
 
     Verifies the signature against the raw body *before* parsing JSON,
-    stores the raw event idempotently by its id, and returns fast — no
-    downstream processing happens here yet.
+    stores the raw event in the database (idempotently, by its id) —
+    the required, authoritative persistence — and optionally also dumps
+    it to `requests/events/<id>.json` (controlled by
+    `settings.store_raw_event_files`; failures there are logged, not
+    fatal). No downstream processing happens here yet.
     """
     raw_body = await request.body()
     signature = request.headers.get("x-nylas-signature")
@@ -41,11 +57,21 @@ async def receive_event(request: Request) -> JSONResponse:
     except json.JSONDecodeError:
         return JSONResponse(status_code=400, content={"detail": "Invalid JSON body"})
 
-    try:
-        store_raw_event(event)
-    except ValueError:
+    event_id = event.get("id") if isinstance(event, dict) else None
+    if not event_id:
         return JSONResponse(
             status_code=400, content={"detail": "Event payload missing 'id'"}
         )
+
+    await run_in_threadpool(_persist_to_db, event_id, event)
+
+    if get_settings().store_raw_event_files:
+        try:
+            store_raw_event(event)
+        except ValueError:
+            logger.warning(
+                "Skipped optional raw-event file write for %s: missing id",
+                event_id,
+            )
 
     return JSONResponse(status_code=200, content={"status": "ok"})
