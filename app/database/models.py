@@ -71,6 +71,11 @@ class Classification(Base):
     input_tokens: Mapped[int | None]
     output_tokens: Mapped[int | None]
     latency_ms: Mapped[int | None]
+    # Where deterministic routing sent this email (a
+    # `app.workflows.triage_workflow.TriageStatus` value, e.g.
+    # "needs_review"). Nullable: rows written before routing was
+    # recorded have none.
+    triage_status: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

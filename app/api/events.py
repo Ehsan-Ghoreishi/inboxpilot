@@ -9,7 +9,7 @@ signed with `X-Nylas-Signature` over the exact raw body.
 import json
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.database.repository import save_raw_event
 from app.database.session import session_scope
 from app.integrations.nylas.webhooks import store_raw_event, verify_webhook_signature
+from app.workflows.background import run_triage_safely
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,9 @@ def _persist_to_db(event_id: str, event: dict) -> None:
 
 
 @router.post("/events")
-async def receive_event(request: Request) -> JSONResponse:
+async def receive_event(
+    request: Request, background_tasks: BackgroundTasks
+) -> JSONResponse:
     """Receive a Nylas webhook notification.
 
     Verifies the signature against the raw body *before* parsing JSON,
@@ -44,7 +47,10 @@ async def receive_event(request: Request) -> JSONResponse:
     the required, authoritative persistence — and optionally also dumps
     it to `requests/events/<id>.json` (controlled by
     `settings.store_raw_event_files`; failures there are logged, not
-    fatal). No downstream processing happens here yet.
+    fatal). Triage (mapping, classification, pending action) is
+    scheduled as a background task that runs after the 200 is sent, so
+    its failures never affect the response (see
+    `app.workflows.background.run_triage_safely`).
     """
     raw_body = await request.body()
     signature = request.headers.get("x-nylas-signature")
@@ -74,4 +80,5 @@ async def receive_event(request: Request) -> JSONResponse:
                 event_id,
             )
 
+    background_tasks.add_task(run_triage_safely, event_id, event)
     return JSONResponse(status_code=200, content={"status": "ok"})

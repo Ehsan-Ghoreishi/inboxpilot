@@ -15,6 +15,8 @@ but never sent.
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from app.database.models import (
     ActionType,
     EmailRecord,
@@ -96,19 +98,30 @@ def create_pending_action(
     It is deliberately *not* derived from `analysis.suggested_action`:
     that field is model output, which a malicious email can steer.
     """
-    payload = _build_payload(email, analysis, action_type)
-
     with session_scope() as session:
         email_record = get_or_create_email(session, email)
-        pending_action = _db_create_pending_action(
-            session, email_record.id, action_type, payload
-        )
-        write_audit_log(
-            session,
-            actor="system",
-            action="created",
-            pending_action_id=pending_action.id,
-        )
+        return propose_action(session, email_record.id, email, analysis, action_type)
+
+
+def propose_action(
+    session: Session,
+    email_record_id: int,
+    email: Email,
+    analysis: EmailAnalysis,
+    action_type: ActionType,
+) -> PendingAction:
+    """`create_pending_action()` within the caller's transaction, for an
+    already-persisted email."""
+    payload = _build_payload(email, analysis, action_type)
+    pending_action = _db_create_pending_action(
+        session, email_record_id, action_type, payload
+    )
+    write_audit_log(
+        session,
+        actor="system",
+        action="created",
+        pending_action_id=pending_action.id,
+    )
     return pending_action
 
 

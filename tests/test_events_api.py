@@ -1,5 +1,8 @@
 import json
-from unittest.mock import patch
+import logging
+from contextlib import nullcontext
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,6 +35,13 @@ def _isolated_env(tmp_path, monkeypatch):
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _enable_triage_logger(monkeypatch):
+    """Alembic's `fileConfig` (run by the integration suite in the same
+    process) disables already-created loggers; re-enable ours for caplog."""
+    monkeypatch.setattr(logging.getLogger("app.workflows.background"), "disabled", False)
+
+
 @pytest.fixture
 def client():
     # Imported after env isolation is active so any module-level settings
@@ -54,6 +64,15 @@ def mock_db_persistence():
     """
     with patch("app.api.events._persist_to_db") as mock_persist:
         yield mock_persist
+
+
+@pytest.fixture(autouse=True)
+def mock_triage(monkeypatch):
+    """Background triage is unit-tested in tests/test_triage_pipeline.py;
+    here it's stubbed so these tests only check that it gets scheduled."""
+    mock = MagicMock()
+    monkeypatch.setattr("app.api.events.run_triage_safely", mock)
+    return mock
 
 
 SAMPLE_EVENT = {
@@ -198,3 +217,70 @@ def test_post_events_valid_signature_missing_id_returns_400(client):
     response = _signed_post(client, body)
 
     assert response.status_code == 400
+
+
+# --- POST /events -> background triage -----------------------------------------
+
+
+SYNTHETIC_SUBJECT = "Synthetic subject that must never be logged"
+
+FULL_EVENT = {
+    **SAMPLE_EVENT,
+    "id": "evt-full-1",
+    "data": {
+        "application_id": "app-1",
+        "object": {
+            "id": "msg-full-1",
+            "grant_id": "grant-test",
+            "thread_id": "thread-full-1",
+            "subject": SYNTHETIC_SUBJECT,
+            "from": [{"name": "Test Sender", "email": "sender@example.com"}],
+            "to": [{"email": "candidate@example.com"}],
+            "date": 1706811644,
+            "body": "Synthetic body.",
+        },
+    },
+}
+
+
+def test_post_events_schedules_background_triage(client, mock_triage):
+    body = json.dumps(SAMPLE_EVENT).encode("utf-8")
+
+    response = _signed_post(client, body)
+
+    assert response.status_code == 200
+    mock_triage.assert_called_once_with("evt-123", SAMPLE_EVENT)
+
+
+def test_post_events_invalid_signature_schedules_no_triage(client, mock_triage):
+    body = json.dumps(SAMPLE_EVENT).encode("utf-8")
+
+    _signed_post(client, body, secret="wrong-secret")
+
+    mock_triage.assert_not_called()
+
+
+def test_post_events_agent_exception_does_not_break_the_request(
+    client, monkeypatch, caplog
+):
+    from app.workflows.background import run_triage_safely
+
+    monkeypatch.setattr("app.api.events.run_triage_safely", run_triage_safely)
+    monkeypatch.setattr("app.workflows.background.session_scope", nullcontext)
+    monkeypatch.setattr(
+        "app.workflows.triage_workflow.insert_email_if_new",
+        lambda session, email: SimpleNamespace(id=1),
+    )
+    analyzer = MagicMock(side_effect=RuntimeError(SYNTHETIC_SUBJECT))
+    monkeypatch.setattr("app.workflows.triage_workflow.analyze_with_metadata", analyzer)
+    body = json.dumps(FULL_EVENT).encode("utf-8")
+
+    with caplog.at_level(logging.INFO):
+        response = _signed_post(client, body)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    analyzer.assert_called_once()
+    assert "evt-full-1" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert SYNTHETIC_SUBJECT not in caplog.text

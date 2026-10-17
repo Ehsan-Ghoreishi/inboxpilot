@@ -8,7 +8,7 @@ session bound to a test database/transaction directly.
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -42,6 +42,20 @@ def save_raw_event(session: Session, event_id: str, payload: dict) -> RawEvent:
     ).one()
 
 
+def _email_columns(email: Email) -> dict:
+    return {
+        "nylas_message_id": email.id,
+        "thread_id": email.thread_id,
+        "grant_id": email.grant_id,
+        "sender_name": email.sender.name,
+        "sender_email": email.sender.email,
+        "recipients": [{"name": r.name, "email": r.email} for r in email.recipients],
+        "subject": email.subject,
+        "body": email.body,
+        "received_at": email.received_at,
+    }
+
+
 def get_or_create_email(session: Session, email: Email) -> EmailRecord:
     """Find the `EmailRecord` for this canonical `Email`, inserting if new."""
     existing = session.scalars(
@@ -50,22 +64,29 @@ def get_or_create_email(session: Session, email: Email) -> EmailRecord:
     if existing is not None:
         return existing
 
-    record = EmailRecord(
-        nylas_message_id=email.id,
-        thread_id=email.thread_id,
-        grant_id=email.grant_id,
-        sender_name=email.sender.name,
-        sender_email=email.sender.email,
-        recipients=[
-            {"name": r.name, "email": r.email} for r in email.recipients
-        ],
-        subject=email.subject,
-        body=email.body,
-        received_at=email.received_at,
-    )
+    record = EmailRecord(**_email_columns(email))
     session.add(record)
     session.flush()
     return record
+
+
+def insert_email_if_new(session: Session, email: Email) -> EmailRecord | None:
+    """Insert this `Email`, or return `None` if its message id is already stored.
+
+    A concurrent insert of the same message id blocks on the unique
+    index until the other transaction finishes, so exactly one caller
+    gets the record back — this is what makes processing once-per-message.
+    """
+    stmt = (
+        pg_insert(EmailRecord)
+        .values(**_email_columns(email))
+        .on_conflict_do_nothing(index_elements=["nylas_message_id"])
+        .returning(EmailRecord.id)
+    )
+    record_id = session.execute(stmt).scalar_one_or_none()
+    if record_id is None:
+        return None
+    return session.get_one(EmailRecord, record_id)
 
 
 def save_classification(
@@ -78,6 +99,7 @@ def save_classification(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     latency_ms: int | None = None,
+    triage_status: str | None = None,
 ) -> Classification:
     classification = Classification(
         email_id=email_record_id,
@@ -88,6 +110,7 @@ def save_classification(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         latency_ms=latency_ms,
+        triage_status=triage_status,
     )
     session.add(classification)
     session.flush()
@@ -162,5 +185,21 @@ def list_recent_emails(session: Session, limit: int = 50) -> list[EmailRecord]:
             )
             .order_by(EmailRecord.received_at.desc(), EmailRecord.id.desc())
             .limit(limit)
+        )
+    )
+
+
+def list_unprocessed_raw_events(session: Session) -> list[RawEvent]:
+    """Raw events whose message (`payload.data.object.id`) has no `emails` row.
+
+    Events without a message id (e.g. non-message triggers) are included
+    too; it's up to the caller to skip what it can't process.
+    """
+    message_id = RawEvent.payload["data"]["object"]["id"].as_string()
+    return list(
+        session.scalars(
+            select(RawEvent)
+            .where(~exists().where(EmailRecord.nylas_message_id == message_id))
+            .order_by(RawEvent.id)
         )
     )
