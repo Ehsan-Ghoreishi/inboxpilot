@@ -1,0 +1,32 @@
+[project]
+name = "inboxpilot"
+version = "0.1.0"
+description = "Event-driven AI email and calendar assistant for job-search email triage"
+authors = [
+    { name = "ehsanghoreishi", email = "ehsan.ghoreshi62@gmail.com" }
+]
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "openai",
+    "sqlalchemy",
+    "psycopg[binary]",
+    "python-dotenv",
+    "pydantic-settings>=2.16.0",
+    "email-validator>=2.3.0",
+    "nylas>=6.18.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
