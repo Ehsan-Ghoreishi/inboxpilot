@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>InboxPilot</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1.5rem; color: #222; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #ddd; padding: .5rem; text-align: left; vertical-align: top; }
+    .muted { color: #777; }
+    .action { margin-bottom: .4rem; }
+    .action button { margin-left: .4rem; }
+    #status { min-height: 1.2em; }
+  </style>
+</head>
+<body>
+  <h1>InboxPilot</h1>
+
+  <p>
+    <label>API key <input id="api-key" type="password" autocomplete="off"></label>
+    <span class="muted">(kept in this tab only; sent as X-API-Key)</span>
+  </p>
+  <p id="status" role="status"></p>
+
+  {% if emails %}
+  <table>
+    <thead>
+      <tr><th>Received</th><th>From</th><th>Subject</th><th>Classification</th><th>Pending actions</th></tr>
+    </thead>
+    <tbody>
+      {% for email in emails %}
+      <tr>
+        <td>{{ email.received_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td>{{ email.sender_name or "" }} <span class="muted">&lt;{{ email.sender_email }}&gt;</span></td>
+        <td>{{ email.subject }}</td>
+        <td>
+          {% if email.classification %}
+            {{ email.classification.category }}
+            <span class="muted">({{ "%.2f"|format(email.classification.confidence) }})</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% for action in email.pending_actions %}
+          <div class="action" data-action-id="{{ action.id }}">
+            {{ action.action_type.value }}
+            <button type="button" data-decision="approve">Approve</button>
+            <button type="button" data-decision="reject">Reject</button>
+          </div>
+          {% else %}
+            <span class="muted">none</span>
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No emails yet.</p>
+  {% endif %}
+
+  <script>
+    const keyInput = document.getElementById("api-key");
+    const statusEl = document.getElementById("status");
+    try { keyInput.value = sessionStorage.getItem("inboxpilot-api-key") || ""; } catch (_) {}
+    keyInput.addEventListener("input", () => {
+      try { sessionStorage.setItem("inboxpilot-api-key", keyInput.value); } catch (_) {}
+    });
+
+    document.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-decision]");
+      if (!button) return;
+      const row = button.closest("[data-action-id]");
+      const id = row.dataset.actionId;
+      const decision = button.dataset.decision;
+      if (!keyInput.value) { statusEl.textContent = "Enter the API key first."; return; }
+
+      row.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      try {
+        const response = await fetch(`/actions/${encodeURIComponent(id)}/${decision}`, {
+          method: "POST",
+          headers: { "X-API-Key": keyInput.value },
+        });
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) {
+          row.textContent = `${body.action_type}: ${body.status}`;
+          statusEl.textContent = `Action ${id} ${body.status}.`;
+        } else {
+          statusEl.textContent = `Action ${id}: ${response.status} ${body.detail || ""}`;
+          if (response.status === 401) row.querySelectorAll("button").forEach((b) => (b.disabled = false));
+        }
+      } catch (err) {
+        statusEl.textContent = `Action ${id}: request failed.`;
+        row.querySelectorAll("button").forEach((b) => (b.disabled = false));
+      }
+    });
+  </script>
+</body>
+</html>

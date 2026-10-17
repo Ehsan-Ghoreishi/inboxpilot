@@ -10,7 +10,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database.models import (
     ActionType,
@@ -137,3 +137,30 @@ def write_audit_log(
     session.flush()
     return entry
 
+
+def list_pending_actions(
+    session: Session, status: PendingActionStatus
+) -> list[PendingAction]:
+    return list(
+        session.scalars(
+            select(PendingAction)
+            .where(PendingAction.status == status)
+            .order_by(PendingAction.created_at.desc(), PendingAction.id.desc())
+        )
+    )
+
+
+def list_recent_emails(session: Session, limit: int = 50) -> list[EmailRecord]:
+    """Most recent emails, with classifications and pending actions eagerly
+    loaded so they're usable after the session closes."""
+    return list(
+        session.scalars(
+            select(EmailRecord)
+            .options(
+                selectinload(EmailRecord.classifications),
+                selectinload(EmailRecord.pending_actions),
+            )
+            .order_by(EmailRecord.received_at.desc(), EmailRecord.id.desc())
+            .limit(limit)
+        )
+    )
