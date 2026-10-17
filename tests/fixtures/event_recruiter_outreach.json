@@ -1,0 +1,32 @@
+{
+  "specversion": "1.0",
+  "type": "message.created",
+  "source": "/google/emails/realtime",
+  "id": "evt-synthetic-recruiter-001",
+  "time": 1706811644,
+  "webhook_delivery_attempt": 1,
+  "data": {
+    "application_id": "app-synthetic-demo",
+    "object": {
+      "id": "msg-synthetic-recruiter-001",
+      "object": "message",
+      "grant_id": "grant-synthetic-demo",
+      "thread_id": "thread-synthetic-recruiter-001",
+      "subject": "Quick question about your background",
+      "from": [
+        { "name": "Priya Shah", "email": "priya.shah@brightforge.io" }
+      ],
+      "to": [
+        { "name": "Candidate", "email": "candidate@example.com" }
+      ],
+      "cc": [],
+      "bcc": [],
+      "date": 1706811644,
+      "unread": true,
+      "starred": false,
+      "snippet": "I came across your profile and we have a Senior Backend Engineer opening.",
+      "body": "<p>Hi! I came across your profile and we have a Senior Backend Engineer opening at Brightforge. Would you be open to a quick chat sometime next week to see if it's a fit?</p>",
+      "folders": ["INBOX"]
+    }
+  }
+}

@@ -41,7 +41,7 @@ def _isolated_env(tmp_path, monkeypatch):
     get_settings.cache_clear()
 
 
-SAMPLE_MESSAGE_PAYLOAD = {
+SAMPLE_MESSAGE_OBJECT = {
     "id": "msg-1",
     "object": "message",
     "grant_id": "grant-test",
@@ -53,6 +53,27 @@ SAMPLE_MESSAGE_PAYLOAD = {
     "body": "<p>Are you free Tuesday?</p>",
     "snippet": "Are you free Tuesday?",
 }
+
+
+def _wrap_in_event_envelope(message_object: dict) -> dict:
+    """Wrap a message object into a full webhook event envelope, as
+    `nylas_payload_to_email` now expects (the shape `store_raw_event`
+    writes to disk)."""
+    return {
+        "specversion": "1.0",
+        "type": "message.created",
+        "source": "/google/emails/realtime",
+        "id": "evt-1",
+        "time": 1706811644,
+        "webhook_delivery_attempt": 1,
+        "data": {
+            "application_id": "app-1",
+            "object": message_object,
+        },
+    }
+
+
+SAMPLE_EVENT_PAYLOAD = _wrap_in_event_envelope(SAMPLE_MESSAGE_OBJECT)
 
 
 # --- compute_signature / verify_webhook_signature ---------------------------
@@ -117,7 +138,7 @@ def test_store_raw_event_missing_id_raises(tmp_path):
 
 
 def test_nylas_payload_to_email_maps_valid_payload():
-    email = nylas_payload_to_email(SAMPLE_MESSAGE_PAYLOAD)
+    email = nylas_payload_to_email(SAMPLE_EVENT_PAYLOAD)
 
     assert email.id == "msg-1"
     assert email.thread_id == "thread-1"
@@ -132,14 +153,18 @@ def test_nylas_payload_to_email_maps_valid_payload():
 
 
 def test_nylas_payload_to_email_missing_required_field_raises():
-    payload = {k: v for k, v in SAMPLE_MESSAGE_PAYLOAD.items() if k != "thread_id"}
+    broken_object = {
+        k: v for k, v in SAMPLE_MESSAGE_OBJECT.items() if k != "thread_id"
+    }
+    payload = _wrap_in_event_envelope(broken_object)
 
-    with pytest.raises((ValidationError, KeyError)):
+    with pytest.raises(ValidationError):
         nylas_payload_to_email(payload)
 
 
 def test_nylas_payload_to_email_defaults_blank_subject_and_body():
-    payload = {**SAMPLE_MESSAGE_PAYLOAD, "subject": None, "body": None}
+    object_with_blanks = {**SAMPLE_MESSAGE_OBJECT, "subject": None, "body": None}
+    payload = _wrap_in_event_envelope(object_with_blanks)
 
     email = nylas_payload_to_email(payload)
 

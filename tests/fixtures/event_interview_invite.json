@@ -1,0 +1,34 @@
+{
+  "specversion": "1.0",
+  "type": "message.created",
+  "source": "/google/emails/realtime",
+  "id": "evt-synthetic-interview-001",
+  "time": 1707120000,
+  "webhook_delivery_attempt": 1,
+  "data": {
+    "application_id": "app-synthetic-demo",
+    "object": {
+      "id": "msg-synthetic-interview-001",
+      "object": "message",
+      "grant_id": "grant-synthetic-demo",
+      "thread_id": "thread-synthetic-interview-001",
+      "subject": "Interview confirmed: Thursday 2pm PT",
+      "from": [
+        { "name": "Recruiting", "email": "recruiting@nimbuscloud.example" }
+      ],
+      "to": [
+        { "name": "Candidate", "email": "candidate@example.com" }
+      ],
+      "cc": [
+        { "name": "Hiring Manager", "email": "hiring.manager@nimbuscloud.example" }
+      ],
+      "bcc": [],
+      "date": 1707120000,
+      "unread": true,
+      "starred": false,
+      "snippet": "This confirms your technical interview for the Platform Engineer role.",
+      "body": "<p>This confirms your technical interview for the Platform Engineer role is scheduled for Thursday, February 7th at 2:00 PM PT via video call. A calendar invite will follow.</p>",
+      "folders": ["INBOX"]
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "specversion": "1.0",
+  "type": "message.created",
+  "source": "/google/emails/realtime",
+  "id": "evt-synthetic-normal-001",
+  "time": 1706800000,
+  "webhook_delivery_attempt": 1,
+  "data": {
+    "application_id": "app-synthetic-demo",
+    "object": {
+      "id": "msg-synthetic-normal-001",
+      "object": "message",
+      "grant_id": "grant-synthetic-demo",
+      "thread_id": "thread-synthetic-normal-001",
+      "subject": "Lunch next week?",
+      "from": [
+        { "name": "Sam Rivera", "email": "sam.rivera@example.com" }
+      ],
+      "to": [
+        { "name": "Candidate", "email": "candidate@example.com" }
+      ],
+      "cc": [],
+      "bcc": [],
+      "date": 1706800000,
+      "unread": true,
+      "starred": false,
+      "snippet": "Hey! Are you free for lunch sometime next week?",
+      "body": "<p>Hey! Are you free for lunch sometime next week? Let me know what works.</p>",
+      "folders": ["INBOX", "CATEGORY_PERSONAL"]
+    }
+  }
+}
