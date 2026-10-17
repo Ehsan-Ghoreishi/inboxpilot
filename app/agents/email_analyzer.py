@@ -11,6 +11,8 @@ instructions found inside it.
 """
 
 import re
+import time
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -19,13 +21,25 @@ from openai import OpenAI
 from app.config import get_settings
 from app.schemas.email import Email, EmailAnalysis
 
+PROMPTS_DIR = Path(__file__).parent / "prompts"
 PROMPT_VERSION = "analyze_v1"
-PROMPT_PATH = Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.md"
+PROMPT_PATH = PROMPTS_DIR / f"{PROMPT_VERSION}.md"
+
+
+def available_prompt_versions() -> list[str]:
+    return sorted(path.stem for path in PROMPTS_DIR.glob("*.md"))
 
 
 @lru_cache
-def _load_system_prompt() -> str:
-    return PROMPT_PATH.read_text(encoding="utf-8")
+def _load_system_prompt(prompt_version: str = PROMPT_VERSION) -> str:
+    # Membership check, not path building from the raw string: the
+    # version can come from a CLI argument.
+    if prompt_version not in available_prompt_versions():
+        raise ValueError(
+            f"Unknown prompt version {prompt_version!r}; "
+            f"available: {', '.join(available_prompt_versions())}"
+        )
+    return (PROMPTS_DIR / f"{prompt_version}.md").read_text(encoding="utf-8")
 
 
 @lru_cache
@@ -76,19 +90,52 @@ def _format_email_for_prompt(email: Email) -> str:
     )
 
 
-def analyze(email: Email) -> EmailAnalysis:
-    """Classify and extract structured information from an `Email`."""
-    client = _get_client()
-    settings = get_settings()
+@dataclass(frozen=True)
+class AnalysisRun:
+    """An `EmailAnalysis` plus what it cost to produce."""
 
+    analysis: EmailAnalysis
+    model: str
+    prompt_version: str
+    input_tokens: int | None
+    output_tokens: int | None
+    latency_ms: int
+
+
+def analyze_with_metadata(
+    email: Email,
+    prompt_version: str = PROMPT_VERSION,
+    model: str | None = None,
+) -> AnalysisRun:
+    """Like `analyze()`, but also reports model, token usage, and latency.
+    `model` defaults to `settings.openai_model`."""
+    client = _get_client()
+    model = model or get_settings().openai_model
+    instructions = _load_system_prompt(prompt_version)
+
+    started = time.perf_counter()
     response = client.responses.parse(
-        model=settings.openai_model,
-        instructions=_load_system_prompt(),
+        model=model,
+        instructions=instructions,
         input=[{"role": "user", "content": _format_email_for_prompt(email)}],
         text_format=EmailAnalysis,
     )
+    latency_ms = round((time.perf_counter() - started) * 1000)
 
     result = response.output_parsed
     if result is None:
         raise ValueError("Model did not return a parsed EmailAnalysis.")
-    return result
+    usage = getattr(response, "usage", None)
+    return AnalysisRun(
+        analysis=result,
+        model=model,
+        prompt_version=prompt_version,
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        latency_ms=latency_ms,
+    )
+
+
+def analyze(email: Email) -> EmailAnalysis:
+    """Classify and extract structured information from an `Email`."""
+    return analyze_with_metadata(email).analysis
