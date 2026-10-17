@@ -63,6 +63,28 @@ uv run uvicorn app.main:app --reload  # API on http://localhost:8000
 Tests: `uv run pytest` (integration tests in `tests/integration/` use
 the Compose database and are skipped if Docker isn't available).
 
+## Offline development
+
+Set `DRY_RUN=true` in `.env` to run the full approval flow without a
+live Nylas grant:
+
+- Approving a pending action (draft reply, archive, calendar event)
+  never calls Nylas. The action is logged by type and pending-action id
+  only — no email content — and given a fake id (`dry-run-<uuid>`).
+- The action still moves `pending -> approved -> executed`, and its
+  `audit_log` rows for those steps have `dry_run = true`, so dry-run
+  activity is distinguishable from real actions.
+- Repeat approvals still return 409, and every `/actions` route still
+  requires `X-API-Key`.
+
+The analysis pipeline (webhook -> classification -> pending action)
+never calls Nylas regardless of this setting: it works from the stored
+webhook payload. To feed it without a live grant, send signed synthetic
+events with `scripts/send_fake_event.py`.
+
+`DRY_RUN` defaults to `false`; apply migrations
+(`uv run alembic upgrade head`) to add the `audit_log.dry_run` column.
+
 ## Design decisions
 
 ### Approval gate

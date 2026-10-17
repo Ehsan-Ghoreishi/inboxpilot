@@ -1,13 +1,15 @@
 """Integration tests: /actions endpoints and the dashboard, real test DB,
 Nylas mocked."""
 
+import logging
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from app.config import get_settings
 from app.database.models import ActionType
 from app.database.repository import get_or_create_email, save_classification
 from app.database.session import session_scope
@@ -105,6 +107,101 @@ def test_reject_then_approve_is_409_and_never_calls_nylas(client):
     assert rejected.json()["status"] == "rejected"
     assert approved.status_code == 409
     mock_archive.assert_not_called()
+
+
+@pytest.fixture
+def dry_run(app_db_env, monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "true")
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def actions_logger(monkeypatch) -> None:
+    """Alembic's `fileConfig` (run by this suite's migrations) disables
+    already-created loggers; re-enable ours for caplog."""
+    monkeypatch.setattr(logging.getLogger("app.services.actions"), "disabled", False)
+
+
+@pytest.fixture
+def nylas_client(monkeypatch) -> MagicMock:
+    """The Nylas client, as the action integration would obtain it."""
+    mock = MagicMock()
+    monkeypatch.setattr("app.integrations.nylas.actions.get_client", mock)
+    return mock
+
+
+def _audit_rows(test_engine, pending_action_id: int) -> list[tuple[str, bool]]:
+    with test_engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT action, dry_run FROM audit_log "
+                "WHERE pending_action_id = :id ORDER BY id"
+            ),
+            {"id": pending_action_id},
+        ).all()
+    return [(row.action, row.dry_run) for row in rows]
+
+
+@pytest.mark.parametrize("action_type", list(ActionType))
+def test_dry_run_approve_executes_without_calling_nylas(
+    client,
+    dry_run,
+    nylas_client,
+    actions_logger,
+    test_engine,
+    caplog,
+    action_type,
+):
+    pending_action = create_pending_action(_email(), _analysis(), action_type)
+
+    with caplog.at_level(logging.INFO, logger="app.services.actions"):
+        response = client.post(
+            f"/actions/{pending_action.id}/approve", headers=API_KEY
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "executed"
+    nylas_client.assert_not_called()
+    assert _audit_rows(test_engine, pending_action.id) == [
+        ("created", False),
+        ("approved", True),
+        ("executed", True),
+    ]
+    assert f"pending_action_id={pending_action.id}" in caplog.text
+    assert action_type.value in caplog.text
+    assert "dry-run-" in caplog.text
+    for content in ("opportunity", "Jane Recruiter", "jane@example.com"):
+        assert content not in caplog.text
+
+
+def test_dry_run_double_approve_is_409_and_never_calls_nylas(
+    client, dry_run, nylas_client
+):
+    pending_action = create_pending_action(_email(), _analysis(), ActionType.ARCHIVE)
+
+    first = client.post(f"/actions/{pending_action.id}/approve", headers=API_KEY)
+    second = client.post(f"/actions/{pending_action.id}/approve", headers=API_KEY)
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    nylas_client.assert_not_called()
+
+
+def test_approve_without_api_key_is_401_and_leaves_action_pending(
+    client, dry_run, nylas_client, test_engine
+):
+    pending_action = create_pending_action(_email(), _analysis(), ActionType.ARCHIVE)
+
+    response = client.post(f"/actions/{pending_action.id}/approve")
+
+    assert response.status_code == 401
+    nylas_client.assert_not_called()
+    with test_engine.connect() as conn:
+        status = conn.execute(
+            text("SELECT status FROM pending_actions WHERE id = :id"),
+            {"id": pending_action.id},
+        ).scalar_one()
+    assert status == "pending"
 
 
 def test_unknown_action_is_404(client):

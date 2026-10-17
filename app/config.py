@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # the required, authoritative store). Default on; set to false to
     # turn off the optional file copy.
     store_raw_event_files: bool = True
+    # When true, approving a pending action never calls Nylas: the action
+    # is logged (type + id only), gets a fake "dry-run-<uuid>" id, and is
+    # still marked executed, with its audit rows flagged dry_run. For
+    # offline development without a live grant.
+    dry_run: bool = False
 
 
 @lru_cache

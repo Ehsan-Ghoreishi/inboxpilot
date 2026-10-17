@@ -152,9 +152,13 @@ def write_audit_log(
     actor: str,
     action: str,
     pending_action_id: int | None = None,
+    dry_run: bool = False,
 ) -> AuditLog:
     entry = AuditLog(
-        actor=actor, action=action, pending_action_id=pending_action_id
+        actor=actor,
+        action=action,
+        pending_action_id=pending_action_id,
+        dry_run=dry_run,
     )
     session.add(entry)
     session.flush()

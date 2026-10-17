@@ -9,7 +9,7 @@ repository layer) would collide on the name otherwise.
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Enum as SAEnum, ForeignKey, func
+from sqlalchemy import JSON, DateTime, Enum as SAEnum, ForeignKey, false, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -153,3 +153,5 @@ class AuditLog(Base):
     at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # True when the audited step ran under DRY_RUN (no Nylas call made).
+    dry_run: Mapped[bool] = mapped_column(default=False, server_default=false())

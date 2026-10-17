@@ -5,18 +5,23 @@ client's say-so — and every transition writes an `audit_log` row.
 `approve()` is the *only* place that calls Nylas and takes a real,
 consequential action: nothing executes before a human approves it (per
 CLAUDE.md's human-confirmation rule). Rejecting, or approving twice,
-never calls Nylas.
+never calls Nylas. With `DRY_RUN=true`, approving doesn't call Nylas
+either: it goes through the same state transitions and audit trail, but
+the action is only logged and given a fake id.
 
 Nothing in this module (or the Nylas calls it makes) permanently
 deletes anything — "archive" is a folder move, and a draft is created
 but never sent.
 """
 
+import logging
 from datetime import timedelta
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database.models import (
     ActionType,
     EmailRecord,
@@ -36,6 +41,8 @@ from app.integrations.nylas.actions import (
     create_draft,
 )
 from app.schemas.email import Email, EmailAnalysis
+
+logger = logging.getLogger(__name__)
 
 
 class PendingActionError(Exception):
@@ -125,23 +132,38 @@ def propose_action(
     return pending_action
 
 
-def _execute(pending_action: PendingAction, email_record: EmailRecord) -> None:
+def _execute(pending_action: PendingAction, email_record: EmailRecord) -> str:
+    """Perform the real Nylas action; return the id of what it acted on
+    or created."""
     grant_id = email_record.grant_id
     payload = pending_action.payload
 
     if pending_action.action_type == ActionType.ARCHIVE:
         archive_message(grant_id, email_record.nylas_message_id)
-    elif pending_action.action_type == ActionType.DRAFT_REPLY:
-        create_draft(grant_id, **payload)
-    elif pending_action.action_type == ActionType.CREATE_EVENT:
-        create_calendar_event(grant_id, **payload)
-    else:
-        raise ValueError(f"Unhandled action type: {pending_action.action_type}")
+        return email_record.nylas_message_id
+    if pending_action.action_type == ActionType.DRAFT_REPLY:
+        return str(create_draft(grant_id, **payload).get("id"))
+    if pending_action.action_type == ActionType.CREATE_EVENT:
+        return str(create_calendar_event(grant_id, **payload).get("id"))
+    raise ValueError(f"Unhandled action type: {pending_action.action_type}")
+
+
+def _execute_dry_run(pending_action: PendingAction) -> str:
+    """Stand-in for `_execute()` under DRY_RUN: never touches Nylas.
+    Logs only the action type and id — never payload or email content."""
+    fake_id = f"dry-run-{uuid4()}"
+    logger.info(
+        "DRY_RUN: skipped Nylas %s for pending_action_id=%s (fake id %s)",
+        pending_action.action_type.value,
+        pending_action.id,
+        fake_id,
+    )
+    return fake_id
 
 
 def approve(pending_action_id: int, actor: str = "human") -> PendingAction:
-    """Approve a pending action: executes the real Nylas action, then
-    marks it `executed`.
+    """Approve a pending action: marks it `approved`, executes the Nylas
+    action (or, under DRY_RUN, a logged no-op), then marks it `executed`.
 
     Only an action whose status is `pending` can be approved. Approving
     an action that's already `executed`, `rejected`, `approved`, or
@@ -155,6 +177,7 @@ def approve(pending_action_id: int, actor: str = "human") -> PendingAction:
     # the audit row we're trying to persist. Instead we let the `with`
     # block exit normally (so it commits), and only raise afterward.
     execution_error: Exception | None = None
+    dry_run = get_settings().dry_run
 
     with session_scope() as session:
         pending_action = session.get_one(PendingAction, pending_action_id)
@@ -164,9 +187,22 @@ def approve(pending_action_id: int, actor: str = "human") -> PendingAction:
                 f"'{pending_action.status.value}', not 'pending' — cannot approve."
             )
 
-        email_record = pending_action.email
+        update_pending_action_status(
+            session, pending_action_id, PendingActionStatus.APPROVED
+        )
+        write_audit_log(
+            session,
+            actor=actor,
+            action="approved",
+            pending_action_id=pending_action_id,
+            dry_run=dry_run,
+        )
+
         try:
-            _execute(pending_action, email_record)
+            if dry_run:
+                external_id = _execute_dry_run(pending_action)
+            else:
+                external_id = _execute(pending_action, pending_action.email)
         except Exception as exc:  # noqa: BLE001 - re-raised below, after commit
             execution_error = exc
             update_pending_action_status(
@@ -177,16 +213,24 @@ def approve(pending_action_id: int, actor: str = "human") -> PendingAction:
                 actor=actor,
                 action="approve_failed",
                 pending_action_id=pending_action_id,
+                dry_run=dry_run,
             )
         else:
+            logger.info(
+                "Executed pending_action_id=%s: external id %s (dry_run=%s)",
+                pending_action_id,
+                external_id,
+                dry_run,
+            )
             update_pending_action_status(
                 session, pending_action_id, PendingActionStatus.EXECUTED
             )
             write_audit_log(
                 session,
                 actor=actor,
-                action="approved",
+                action="executed",
                 pending_action_id=pending_action_id,
+                dry_run=dry_run,
             )
 
     if execution_error is not None:

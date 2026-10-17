@@ -148,7 +148,11 @@ def test_approve_archive_calls_nylas_and_marks_executed(test_engine):
 
     mock_archive.assert_called_once_with("grant-1", "msg-1")
     assert result.status == PendingActionStatus.EXECUTED
-    assert _audit_actions(test_engine, pending_action.id) == ["created", "approved"]
+    assert _audit_actions(test_engine, pending_action.id) == [
+        "created",
+        "approved",
+        "executed",
+    ]
 
 
 # --- approve(): draft_reply ----------------------------------------------------
@@ -204,7 +208,11 @@ def test_double_approve_raises_and_calls_nylas_only_once(test_engine):
             approve(pending_action.id)
 
     mock_archive.assert_called_once()
-    assert _audit_actions(test_engine, pending_action.id) == ["created", "approved"]
+    assert _audit_actions(test_engine, pending_action.id) == [
+        "created",
+        "approved",
+        "executed",
+    ]
 
 
 def test_approve_already_rejected_action_raises_and_never_calls_nylas(test_engine):
@@ -278,6 +286,7 @@ def test_approve_marks_failed_and_audits_when_nylas_call_raises(test_engine):
     assert status == PendingActionStatus.FAILED.value
     assert _audit_actions(test_engine, pending_action.id) == [
         "created",
+        "approved",
         "approve_failed",
     ]
 
