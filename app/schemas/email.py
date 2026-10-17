@@ -72,3 +72,8 @@ class EmailAnalysis(BaseModel):
     reasoning: Annotated[
         str, StringConstraints(min_length=1, max_length=2000, strip_whitespace=True)
     ]
+    # Model-reported self-assessment of its own confidence, not a
+    # calibrated probability (e.g. 0.9 does not mean "correct 90% of the
+    # time" in any statistical sense) — treat it only as a relative
+    # signal for routing, not as ground truth.
+    confidence: float = Field(ge=0.0, le=1.0)

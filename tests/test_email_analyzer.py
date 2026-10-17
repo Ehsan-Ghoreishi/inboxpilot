@@ -56,6 +56,7 @@ SAMPLE_ANALYSIS = EmailAnalysis(
     urgency=Urgency.HIGH,
     suggested_action=SuggestedAction.CREATE_EVENT,
     reasoning="Sender is proposing a specific interview time.",
+    confidence=0.9,
 )
 
 

@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     # Test-only convenience value (e.g. a mailbox to run manual checks
     # against); not required for the app to run.
     test_email: str | None = None
+    # Below this, a classification's confidence is treated as too low to
+    # act on automatically (see app/workflows/triage_workflow.py).
+    confidence_threshold: float = 0.7
+    # Whether the webhook endpoint also dumps each raw event to
+    # requests/events/<id>.json, in addition to the database (which is
+    # the required, authoritative store). Default on; set to false to
+    # turn off the optional file copy.
+    store_raw_event_files: bool = True
 
 
 @lru_cache

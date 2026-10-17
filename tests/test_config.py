@@ -67,6 +67,23 @@ def test_test_email_is_optional(monkeypatch):
     assert settings.test_email is None
 
 
+def test_confidence_threshold_defaults_to_point_seven(monkeypatch):
+    _set_required_env(monkeypatch)
+
+    settings = get_settings()
+
+    assert settings.confidence_threshold == 0.7
+
+
+def test_confidence_threshold_is_overridable(monkeypatch):
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("CONFIDENCE_THRESHOLD", "0.85")
+
+    settings = get_settings()
+
+    assert settings.confidence_threshold == 0.85
+
+
 def test_missing_required_variable_raises_clear_error(monkeypatch):
     _set_required_env(monkeypatch, OPENAI_API_KEY=None)
 

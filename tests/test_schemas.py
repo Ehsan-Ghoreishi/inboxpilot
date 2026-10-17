@@ -31,6 +31,7 @@ VALID_ANALYSIS = {
     "urgency": "high",
     "suggested_action": "create_event",
     "reasoning": "Sender is proposing a specific interview time.",
+    "confidence": 0.92,
 }
 
 
@@ -176,3 +177,28 @@ def test_email_analysis_malformed_deadline_raises():
 def test_email_analysis_rejects_unexpected_field():
     with pytest.raises(ValidationError):
         EmailAnalysis.model_validate({**VALID_ANALYSIS, "unexpected": "surprise"})
+
+
+def test_email_analysis_confidence_boundary_values_are_valid():
+    low = EmailAnalysis.model_validate({**VALID_ANALYSIS, "confidence": 0.0})
+    high = EmailAnalysis.model_validate({**VALID_ANALYSIS, "confidence": 1.0})
+
+    assert low.confidence == 0.0
+    assert high.confidence == 1.0
+
+
+def test_email_analysis_confidence_below_zero_raises():
+    with pytest.raises(ValidationError):
+        EmailAnalysis.model_validate({**VALID_ANALYSIS, "confidence": -0.01})
+
+
+def test_email_analysis_confidence_above_one_raises():
+    with pytest.raises(ValidationError):
+        EmailAnalysis.model_validate({**VALID_ANALYSIS, "confidence": 1.01})
+
+
+def test_email_analysis_missing_confidence_raises():
+    payload = {k: v for k, v in VALID_ANALYSIS.items() if k != "confidence"}
+
+    with pytest.raises(ValidationError):
+        EmailAnalysis.model_validate(payload)
