@@ -10,7 +10,6 @@ data: it is wrapped in a clearly delimited block and the system prompt
 instructions found inside it.
 """
 
-import re
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -18,6 +17,10 @@ from pathlib import Path
 
 from openai import OpenAI
 
+from app.agents.untrusted import (
+    quote as _quote,
+    single_line as _single_line,
+)
 from app.config import get_settings
 from app.schemas.email import Email, EmailAnalysis
 
@@ -27,7 +30,7 @@ PROMPT_PATH = PROMPTS_DIR / f"{PROMPT_VERSION}.md"
 
 
 def available_prompt_versions() -> list[str]:
-    return sorted(path.stem for path in PROMPTS_DIR.glob("*.md"))
+    return sorted(path.stem for path in PROMPTS_DIR.glob("analyze_*.md"))
 
 
 @lru_cache
@@ -45,27 +48,6 @@ def _load_system_prompt(prompt_version: str = PROMPT_VERSION) -> str:
 @lru_cache
 def _get_client() -> OpenAI:
     return OpenAI(api_key=get_settings().openai_api_key)
-
-
-# Any spelling of the delimiter tag (case, whitespace, attributes) that
-# an email could use to close the untrusted block early, or open a fake one.
-_DELIMITER_TAG = re.compile(r"<\s*/?\s*untrusted_email\b[^>]*>", re.IGNORECASE)
-
-
-def _neutralize_delimiters(text: str) -> str:
-    return _DELIMITER_TAG.sub("[removed delimiter tag]", text)
-
-
-def _single_line(text: str) -> str:
-    """Collapse all whitespace, so a header field can't start new
-    prompt lines (e.g. a forged `Body:` or `SYSTEM:` line)."""
-    return " ".join(_neutralize_delimiters(text).split())
-
-
-def _quote(text: str) -> str:
-    """Prefix every line with `> `, so no line of the body can pass for
-    a line of the prompt's own structure (`Subject:`, `SYSTEM:`, ...)."""
-    return "\n".join(f"> {line}" for line in _neutralize_delimiters(text).splitlines())
 
 
 def _format_email_for_prompt(email: Email) -> str:

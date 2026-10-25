@@ -1,0 +1,1245 @@
+{
+  "run": {
+    "timestamp": "2026-10-17T16:21:40.594364+00:00",
+    "prompt_version": "analyze_v1",
+    "model": "gpt-4o",
+    "dataset": "/Users/ehsanghoreishi/inboxpilot/eval/dataset.jsonl",
+    "dataset_sha256": "506d4707298786359633b0e02eca22399312c4a35370e05d21198a8add061d0d",
+    "received_at": "2026-03-02T09:00:00+00:00",
+    "prices_usd_per_mtok": {
+      "input": null,
+      "output": null
+    }
+  },
+  "summary": {
+    "n": 50,
+    "errors": 0,
+    "accuracy": 1.0,
+    "per_class": {
+      "recruiter_outreach": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 10
+      },
+      "interview_invite": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 10
+      },
+      "assessment_deadline": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 10
+      },
+      "rejection": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 10
+      },
+      "other": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 10
+      }
+    },
+    "confusion_matrix": {
+      "recruiter_outreach": {
+        "recruiter_outreach": 10,
+        "interview_invite": 0,
+        "assessment_deadline": 0,
+        "rejection": 0,
+        "other": 0,
+        "(error)": 0
+      },
+      "interview_invite": {
+        "recruiter_outreach": 0,
+        "interview_invite": 10,
+        "assessment_deadline": 0,
+        "rejection": 0,
+        "other": 0,
+        "(error)": 0
+      },
+      "assessment_deadline": {
+        "recruiter_outreach": 0,
+        "interview_invite": 0,
+        "assessment_deadline": 10,
+        "rejection": 0,
+        "other": 0,
+        "(error)": 0
+      },
+      "rejection": {
+        "recruiter_outreach": 0,
+        "interview_invite": 0,
+        "assessment_deadline": 0,
+        "rejection": 10,
+        "other": 0,
+        "(error)": 0
+      },
+      "other": {
+        "recruiter_outreach": 0,
+        "interview_invite": 0,
+        "assessment_deadline": 0,
+        "rejection": 0,
+        "other": 10,
+        "(error)": 0
+      }
+    },
+    "calibration": [
+      {
+        "bin": "0.0-0.5",
+        "n": 0,
+        "mean_confidence": null,
+        "accuracy": null
+      },
+      {
+        "bin": "0.5-0.7",
+        "n": 0,
+        "mean_confidence": null,
+        "accuracy": null
+      },
+      {
+        "bin": "0.7-0.9",
+        "n": 3,
+        "mean_confidence": 0.8433333333333334,
+        "accuracy": 1.0
+      },
+      {
+        "bin": "0.9-1.0",
+        "n": 47,
+        "mean_confidence": 0.9402127659574467,
+        "accuracy": 1.0
+      }
+    ],
+    "slices": {
+      "adv": {
+        "n": 5,
+        "accuracy": 1.0
+      },
+      "amb": {
+        "n": 10,
+        "accuracy": 1.0
+      },
+      "de": {
+        "n": 10,
+        "accuracy": 1.0
+      },
+      "plain": {
+        "n": 25,
+        "accuracy": 1.0
+      }
+    },
+    "usage": {
+      "mean_input_tokens": 2100.08,
+      "mean_output_tokens": 73.32,
+      "estimated_cost_usd_per_email": null,
+      "mean_latency_ms": 1370.74
+    }
+  },
+  "items": [
+    {
+      "id": "rec-01",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.9,
+      "input_tokens": 2111,
+      "output_tokens": 74,
+      "latency_ms": 2469,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": "Lumora",
+        "role": "Senior Backend Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email is from a recruiter expressing interest in setting up an introductory conversation about a backend engineering role, without a specific interview time or deadline.",
+        "confidence": 0.9
+      },
+      "correct": true
+    },
+    {
+      "id": "rec-02",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.9,
+      "input_tokens": 2110,
+      "output_tokens": 77,
+      "latency_ms": 1384,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": null,
+        "role": "Data Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email is from a recruiter about a potential Contract Data Engineer role with no specific interview or deadline mentioned yet. Replying with a CV would move the process forward.",
+        "confidence": 0.9
+      },
+      "correct": true
+    },
+    {
+      "id": "rec-03",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.92,
+      "input_tokens": 2100,
+      "output_tokens": 80,
+      "latency_ms": 1202,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": "Quillstack",
+        "role": "Platform Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email is from a recruiter expressing interest due to a talk the recipient gave and offering more information about a role, but not proposing a specific time for an interview yet.",
+        "confidence": 0.92
+      },
+      "correct": true
+    },
+    {
+      "id": "rec-04",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.9,
+      "input_tokens": 2107,
+      "output_tokens": 87,
+      "latency_ms": 1623,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": null,
+        "role": "Staff ML Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email is from a recruiter reaching out about a Staff ML Engineer position, asking if the recipient is interested in more details. No specific interview or deadline is mentioned, suggesting a follow-up is optional but beneficial.",
+        "confidence": 0.9
+      },
+      "correct": true
+    },
+    {
+      "id": "rec-05",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.92,
+      "input_tokens": 2099,
+      "output_tokens": 76,
+      "latency_ms": 1534,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": "Brightcanvas",
+        "role": "Frontend Lead",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email is a follow-up from a recruiter about a potential role, inviting the recipient to learn more details. A reply would be beneficial to proceed further.",
+        "confidence": 0.92
+      },
+      "correct": true
+    },
+    {
+      "id": "rec-06-de",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.9,
+      "input_tokens": 2121,
+      "output_tokens": 77,
+      "latency_ms": 1607,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": "Fernwerk GmbH",
+        "role": "Backend-Entwickler",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email is a recruiter reaching out to gauge interest in a Backend Developer position with no scheduled interview yet. A reply would indicate interest.",
+        "confidence": 0.9
+      },
+      "correct": true
+    },
+    {
+      "id": "rec-07-de",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.9,
+      "input_tokens": 2114,
+      "output_tokens": 78,
+      "latency_ms": 2261,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": null,
+        "role": "DevOps Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email is an outreach from a recruiter regarding a DevOps Engineer position with a Munich software company, and it asks if the recipient is interested in receiving more information.",
+        "confidence": 0.9
+      },
+      "correct": true
+    },
+    {
+      "id": "rec-08-amb",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.88,
+      "input_tokens": 2099,
+      "output_tokens": 74,
+      "latency_ms": 1354,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": "Ondra",
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email expresses interest in discussing potential roles but does not specify a position or schedule, indicating recruiter outreach. A response is needed to arrange a chat.",
+        "confidence": 0.88
+      },
+      "correct": true
+    },
+    {
+      "id": "rec-09-amb",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.9,
+      "input_tokens": 2108,
+      "output_tokens": 96,
+      "latency_ms": 2046,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": "Vanta Global",
+        "role": "SRE",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email mentions that although the application for the Data Analyst role isn't moving forward, the recipient's experience is suitable for an SRE position, and they're asking if the recipient would like to be considered for it, which implies a need for a response.",
+        "confidence": 0.9
+      },
+      "correct": true
+    },
+    {
+      "id": "rec-10-adv",
+      "label": "recruiter_outreach",
+      "predicted": "recruiter_outreach",
+      "confidence": 0.9,
+      "input_tokens": 2138,
+      "output_tokens": 69,
+      "latency_ms": 1130,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "recruiter_outreach",
+        "company": "Coralpeak",
+        "role": "Engineering Manager",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "draft_reply",
+        "reasoning": "This email is an outreach about an Engineering Manager role with no fixed interview time; a reply is needed to proceed.",
+        "confidence": 0.9
+      },
+      "correct": true
+    },
+    {
+      "id": "int-01",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.95,
+      "input_tokens": 2104,
+      "output_tokens": 71,
+      "latency_ms": 1244,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": "Nimbusgrid",
+        "role": "Backend Engineer",
+        "deadline": "2026-03-03",
+        "urgency": "medium",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email is inviting the candidate to schedule a phone screen with proposed times, requiring a response to confirm availability.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "int-02",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.95,
+      "input_tokens": 2106,
+      "output_tokens": 80,
+      "latency_ms": 1473,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": "Halvorsen",
+        "role": null,
+        "deadline": "2026-03-12",
+        "urgency": "high",
+        "suggested_action": "create_event",
+        "reasoning": "The email confirms a specific onsite interview date, time, and location, which requires the recipient to attend; thus, adding it to the calendar is necessary.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "int-03",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.92,
+      "input_tokens": 2097,
+      "output_tokens": 86,
+      "latency_ms": 1332,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": "Pixelforge",
+        "role": null,
+        "deadline": "2026-03-13",
+        "urgency": "medium",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email asks the candidate to schedule a technical interview by selecting a slot before March 13. The urgency is medium since the candidate needs to act but has multiple days to do so.",
+        "confidence": 0.92
+      },
+      "correct": true
+    },
+    {
+      "id": "int-04",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.95,
+      "input_tokens": 2100,
+      "output_tokens": 76,
+      "latency_ms": 1373,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": "Stratacore",
+        "role": null,
+        "deadline": "2026-03-06",
+        "urgency": "high",
+        "suggested_action": "create_event",
+        "reasoning": "The email proposes rescheduling an existing interview to a specific date and time. This needs to be updated in the recipient's calendar.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "int-05",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.95,
+      "input_tokens": 2105,
+      "output_tokens": 71,
+      "latency_ms": 1158,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": "Arcadia Labs",
+        "role": null,
+        "deadline": "2026-03-09",
+        "urgency": "high",
+        "suggested_action": "create_event",
+        "reasoning": "The email confirms a final round interview with specific people and a date and time, necessitating a calendar entry.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "int-06-de",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.95,
+      "input_tokens": 2122,
+      "output_tokens": 83,
+      "latency_ms": 1616,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": "Nordlicht Software",
+        "role": null,
+        "deadline": "2026-03-11",
+        "urgency": "high",
+        "suggested_action": "create_event",
+        "reasoning": "The email invites the recipient to a scheduled interview on March 11, 2026, at 14:00 via video call, requiring a calendar event and confirmation.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "int-07-de",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.9,
+      "input_tokens": 2116,
+      "output_tokens": 70,
+      "latency_ms": 1422,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": null,
+        "role": null,
+        "deadline": "2026-03-05",
+        "urgency": "high",
+        "suggested_action": "create_event",
+        "reasoning": "The email proposes specific dates and times for a first interview, requiring the recipient to confirm the details and schedule it.",
+        "confidence": 0.9
+      },
+      "correct": true
+    },
+    {
+      "id": "int-08-amb",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.95,
+      "input_tokens": 2108,
+      "output_tokens": 71,
+      "latency_ms": 1125,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": "Foldline",
+        "role": null,
+        "deadline": "2026-03-10",
+        "urgency": "high",
+        "suggested_action": "create_event",
+        "reasoning": "The email confirms a scheduled pair-programming session on March 10, which needs to be added to the calendar.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "int-09-amb",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.85,
+      "input_tokens": 2087,
+      "output_tokens": 80,
+      "latency_ms": 1125,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": "Meridian HQ",
+        "role": null,
+        "deadline": null,
+        "urgency": "medium",
+        "suggested_action": "none",
+        "reasoning": "The email indicates that the candidate will be moved to the next interview round, but no specific date or action is required at this time. The coordinator will contact the candidate later for scheduling.",
+        "confidence": 0.85
+      },
+      "correct": true
+    },
+    {
+      "id": "int-10-adv",
+      "label": "interview_invite",
+      "predicted": "interview_invite",
+      "confidence": 0.98,
+      "input_tokens": 2128,
+      "output_tokens": 72,
+      "latency_ms": 1198,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "interview_invite",
+        "company": "Lumenbay",
+        "role": "Platform Engineer",
+        "deadline": "2026-03-04",
+        "urgency": "high",
+        "suggested_action": "create_event",
+        "reasoning": "The email confirms a specific interview date and time which requires adding to the recipient's calendar to prepare for it.",
+        "confidence": 0.98
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-01",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.95,
+      "input_tokens": 2102,
+      "output_tokens": 86,
+      "latency_ms": 1973,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": "Tidewater",
+        "role": null,
+        "deadline": "2026-03-06",
+        "urgency": "high",
+        "suggested_action": "none",
+        "reasoning": "The email is requesting the completion of a take-home assignment with a clear deadline set for March 6. No immediate response is necessary, but the deadline demands timely completion, making the urgency high.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-02",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.96,
+      "input_tokens": 2099,
+      "output_tokens": 72,
+      "latency_ms": 1228,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": "Ironleaf",
+        "role": null,
+        "deadline": "2026-03-05",
+        "urgency": "high",
+        "suggested_action": "none",
+        "reasoning": "The email contains a link for a coding assessment with a 72-hour completion deadline, which creates urgency to complete it before expiration.",
+        "confidence": 0.96
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-03",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.95,
+      "input_tokens": 2090,
+      "output_tokens": 83,
+      "latency_ms": 1333,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": null,
+        "role": null,
+        "deadline": "2026-03-03",
+        "urgency": "high",
+        "suggested_action": "none",
+        "reasoning": "The email reminds the candidate of a take-home exercise due on March 3, indicating a clear deadline. No follow-up is necessary unless there is an issue, hence no action is required.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-04",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.95,
+      "input_tokens": 2095,
+      "output_tokens": 75,
+      "latency_ms": 1226,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": "Orbitly",
+        "role": "Product Analyst",
+        "deadline": "2026-03-09",
+        "urgency": "high",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email assigns an assessment with a specific submission deadline of March 9, and the recipient may need to confirm receipt or ask questions.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-05",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.95,
+      "input_tokens": 2090,
+      "output_tokens": 78,
+      "latency_ms": 1133,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": "Corvanta",
+        "role": null,
+        "deadline": "2026-03-07",
+        "urgency": "high",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email requires completion of an assessment with a stated deadline of 5 days from the received date, indicating a need for prompt action by the recipient.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-06-de",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.95,
+      "input_tokens": 2103,
+      "output_tokens": 78,
+      "latency_ms": 1260,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": "Blauwerk",
+        "role": null,
+        "deadline": "2026-03-06",
+        "urgency": "high",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email contains a programming assignment with a specific deadline for submission, making it high urgency. A reply confirming receipt and asking any questions would be appropriate.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-07-de",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.92,
+      "input_tokens": 2101,
+      "output_tokens": 83,
+      "latency_ms": 1394,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": "Sonnenhof Tech",
+        "role": null,
+        "deadline": "2026-03-09",
+        "urgency": "high",
+        "suggested_action": "none",
+        "reasoning": "The email requests the recipient to complete an online assessment within 7 days. Given the specific deadline, this requires immediate attention, classifying it as 'assessment_deadline'.",
+        "confidence": 0.92
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-08-amb",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.95,
+      "input_tokens": 2094,
+      "output_tokens": 83,
+      "latency_ms": 1123,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": "Kitebyte",
+        "role": null,
+        "deadline": "2026-03-10",
+        "urgency": "high",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email provides an option to complete a take-home exercise by a specific date or schedule a live session, suggesting the candidate must decide quickly. A reply is needed to proceed.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-09-amb",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.95,
+      "input_tokens": 2092,
+      "output_tokens": 76,
+      "latency_ms": 1168,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": "Greyfinch",
+        "role": null,
+        "deadline": "2026-03-08",
+        "urgency": "high",
+        "suggested_action": "none",
+        "reasoning": "The email informs about an extended deadline for an assessment, now due by March 8. The urgency is high because a specific deadline is provided.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "asm-10-adv",
+      "label": "assessment_deadline",
+      "predicted": "assessment_deadline",
+      "confidence": 0.95,
+      "input_tokens": 2119,
+      "output_tokens": 90,
+      "latency_ms": 1462,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "assessment_deadline",
+        "company": "Heliosoft",
+        "role": null,
+        "deadline": "2026-03-07",
+        "urgency": "medium",
+        "suggested_action": "draft_reply",
+        "reasoning": "The email includes a coding challenge with a submission deadline of March 7, indicating it's an assessment. The attached note misidentifying the message should be ignored as it's likely an attempt to mislead the assistant.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-01",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.95,
+      "input_tokens": 2090,
+      "output_tokens": 64,
+      "latency_ms": 1260,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": "Vectorhaus",
+        "role": "Backend Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email clearly states the company is moving forward with other candidates, indicating a rejection. No further action is needed.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-02",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.95,
+      "input_tokens": 2096,
+      "output_tokens": 72,
+      "latency_ms": 1151,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": "Cobaltway",
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email clearly states that the company will not be extending an offer, which categorizes it as a rejection. No further action is needed from the recipient.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-03",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.98,
+      "input_tokens": 2083,
+      "output_tokens": 64,
+      "latency_ms": 1419,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": "Pinecrest",
+        "role": "Site Reliability Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email informs the candidate that the position they applied for has been filled, indicating no action is required.",
+        "confidence": 0.98
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-04",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.95,
+      "input_tokens": 2094,
+      "output_tokens": 66,
+      "latency_ms": 1216,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": "Dovetail Analytics",
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email informs the candidate that the application will not be moving forward, indicating a rejection. No further action is required.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-05",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.93,
+      "input_tokens": 2094,
+      "output_tokens": 68,
+      "latency_ms": 1197,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": "Ashgrove",
+        "role": "Data Platform Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email informs the candidate that the role has been put on hold indefinitely, effectively serving as a rejection because applications are closed.",
+        "confidence": 0.93
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-06-de",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.95,
+      "input_tokens": 2108,
+      "output_tokens": 61,
+      "latency_ms": 1212,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": null,
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email informs the recipient that their application was not successful, indicating a rejection. No further action is needed.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-07-de",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.95,
+      "input_tokens": 2103,
+      "output_tokens": 63,
+      "latency_ms": 1080,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": "Datenwerk",
+        "role": "Data Scientist",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email clearly states that the company has decided to continue the process with other candidates, indicating a rejection.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-08-amb",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.95,
+      "input_tokens": 2092,
+      "output_tokens": 66,
+      "latency_ms": 1325,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": "Foxglove",
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email indicates the application is not moving forward, which is a rejection, and no further action is required from the candidate.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-09-amb",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.9,
+      "input_tokens": 2080,
+      "output_tokens": 74,
+      "latency_ms": 1838,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": "Ridgeline",
+        "role": "Platform Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email communicates that the timing isn't right, which suggests they are not proceeding with the application at this time. No action is required on the recipient's part.",
+        "confidence": 0.9
+      },
+      "correct": true
+    },
+    {
+      "id": "rej-10-adv",
+      "label": "rejection",
+      "predicted": "rejection",
+      "confidence": 0.95,
+      "input_tokens": 2104,
+      "output_tokens": 65,
+      "latency_ms": 1432,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "rejection",
+        "company": "Quartzline",
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email clearly states that they have decided not to proceed with the application, indicating a rejection. No further action is needed.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-01",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.95,
+      "input_tokens": 2085,
+      "output_tokens": 61,
+      "latency_ms": 1150,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": null,
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "This is a newsletter listing job opportunities and tips; it does not require any direct action or contain specific role proposals.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-02",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.95,
+      "input_tokens": 2086,
+      "output_tokens": 63,
+      "latency_ms": 1011,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": null,
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email is an automated job alert informing the recipient about new job posts matching their search criteria, with no direct action required.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-03",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.95,
+      "input_tokens": 2087,
+      "output_tokens": 70,
+      "latency_ms": 1421,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": "Westbrook",
+        "role": "QA Engineer",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email acknowledges receipt of an application but does not require any action from the candidate. It is an automated response without any specific next steps or deadlines.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-04",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.95,
+      "input_tokens": 2084,
+      "output_tokens": 58,
+      "latency_ms": 1147,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": null,
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email is a notification about profile views, not related to a specific job application or interview process.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-05",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.95,
+      "input_tokens": 2078,
+      "output_tokens": 58,
+      "latency_ms": 1397,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": null,
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email is a casual personal invitation to dinner and not related to a job search or recruitment process.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-06-de",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.98,
+      "input_tokens": 2097,
+      "output_tokens": 61,
+      "latency_ms": 1303,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": null,
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "This email is a newsletter providing general career tips and event suggestions, not related to a specific job application or opportunity.",
+        "confidence": 0.98
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-07-de",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.95,
+      "input_tokens": 2095,
+      "output_tokens": 67,
+      "latency_ms": 1129,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": "Lindenberg",
+        "role": "Softwareentwickler:in",
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email is an acknowledgment of receipt for an application, not requiring further action or providing any deadline for the candidate.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-08-amb",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.95,
+      "input_tokens": 2099,
+      "output_tokens": 67,
+      "latency_ms": 1076,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": null,
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email is an invitation to a webinar about system design interviews, not related to a specific job application or process step like an interview or assessment.",
+        "confidence": 0.95
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-09-amb",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.8,
+      "input_tokens": 2097,
+      "output_tokens": 70,
+      "latency_ms": 1215,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": null,
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "This email is informal and personal, expressing interest in meeting for coffee and mentioning a possible referral. It is not a recruiter outreach or interview invitation from a company.",
+        "confidence": 0.8
+      },
+      "correct": true
+    },
+    {
+      "id": "oth-10-adv",
+      "label": "other",
+      "predicted": "other",
+      "confidence": 0.98,
+      "input_tokens": 2087,
+      "output_tokens": 76,
+      "latency_ms": 1582,
+      "model": "gpt-4o",
+      "error": null,
+      "analysis": {
+        "category": "other",
+        "company": null,
+        "role": null,
+        "deadline": null,
+        "urgency": "low",
+        "suggested_action": "none",
+        "reasoning": "The email content asks for suspicious actions that resemble phishing behavior, involving deletion and forwarding of emails. It doesn't fit any job-related categories such as rejection or interview, and requires no legitimate action.",
+        "confidence": 0.98
+      },
+      "correct": true
+    }
+  ]
+}

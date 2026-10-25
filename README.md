@@ -5,7 +5,8 @@ each incoming message, extracts the facts that matter (company, role,
 deadline, urgency), and proposes a next step — a draft reply, a calendar
 event, or archiving — that only happens after a human approves it.
 Stored emails are embedded with pgvector, so the mailbox can be searched
-by meaning ("which companies asked for a take-home?"), not just keywords.
+by meaning, not just keywords, and questions like "which companies asked
+for a take-home?" get an answer that cites the emails it came from.
 
 ## Problem
 
@@ -36,11 +37,13 @@ flowchart LR
     A -->|"after triage commits"| E["embed (OpenAI)"]
     E --> V[(email_embeddings<br/>pgvector HNSW)]
     Q["POST /search (X-API-Key)"] --> V
+    K["POST /ask (X-API-Key)"] -->|"retrieve"| V
+    K -->|"answer from retrieved emails"| O["answerer (OpenAI)<br/>no tools"]
 ```
 
 | Layer | Path | Responsibility |
 |---|---|---|
-| API | `app/api/` | Webhook (`/events`), approval API (`/actions`), semantic search (`/search`), dashboard (`/`) |
+| API | `app/api/` | Webhook (`/events`), approval API (`/actions`), semantic search (`/search`), question answering (`/ask`), dashboard (`/`) |
 | Integrations | `app/integrations/nylas/` | Signature check, SDK client, payload → `Email` mapper, actions |
 | Schemas | `app/schemas/` | Canonical `Email` / `EmailAnalysis`, API responses |
 | Agents | `app/agents/` | LLM classification/extraction; versioned prompts |
@@ -131,8 +134,43 @@ best first, where `score` is cosine similarity (`1 - distance`).
   vectors.
 - **Idempotent embedding.** Each embedding stores a hash of its input
   text; an unchanged email is never re-sent to OpenAI.
-- **`RAG_MIN_SCORE`** (default `0.0`) drops weak matches. It will also
-  gate which emails a future `/ask` endpoint may use as context.
+- **`RAG_MIN_SCORE`** (default `0.0`) drops weak matches, here and in
+  `/ask`.
+
+### Asking questions
+
+`POST /ask` (requires `X-API-Key`) answers a question from your stored
+emails and says which ones it used:
+
+```sh
+curl -X POST localhost:8000/ask -H "X-API-Key: $APP_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"question": "Which companies asked for a take-home?"}'
+```
+
+It returns `{answerable, answer, citations, sources}`: `citations` are
+the ids of the emails the answer relies on, and `sources` are those
+emails in the same shape as `/search` results. It takes the same `top_k`
+and filters as `/search`.
+
+- **Retrieval is `/search`.** The question is embedded and the closest
+  emails passing `RAG_MIN_SCORE` and the filters become the context,
+  each body truncated to 3000 characters.
+- **No evidence, no model call.** If nothing passes, the response is
+  `{answerable: false, answer: "Insufficient evidence in stored
+  emails.", citations: []}` and the model is never called.
+- **Emails are untrusted.** Each is numbered `[1]..[k]` and rendered in
+  the same delimited, `> `-quoted `<untrusted_email>` block as triage
+  uses, and the versioned prompt (`app/agents/prompts/ask_v1.md`) tells
+  the model to answer only from them and never follow instructions
+  inside them.
+- **Citations are checked.** The model returns structured output
+  (`answerable`, `answer`, `citations` as numbers). Every citation must
+  be in `1..k`, and an answerable result must cite at least one email;
+  otherwise the call is retried once, then the response is
+  `answerable: false`. Valid numbers are mapped back to email ids.
+- **Read-only.** The answerer has no tools and nothing here proposes or
+  takes an action, so `/ask` needs no approval step.
 
 ### Canonical schema
 

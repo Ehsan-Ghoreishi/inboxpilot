@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.api.actions import router as actions_router
+from app.api.ask import router as ask_router
 from app.api.dashboard import router as dashboard_router
 from app.api.events import router as events_router
 from app.api.health import router as health_router
@@ -12,6 +13,7 @@ app.include_router(events_router)
 app.include_router(actions_router)
 app.include_router(dashboard_router)
 app.include_router(search_router)
+app.include_router(ask_router)
 
 
 def main() -> None:
