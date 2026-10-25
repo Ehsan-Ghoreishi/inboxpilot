@@ -38,6 +38,9 @@ REQUIRED_ENV = {
     "SERVER_URL": "http://localhost:8000",
     "APP_API_KEY": "app-test",
     "PROCESSING_MODE": "manual",
+    # Pinned so a DRY_RUN exported in the developer's shell can't turn
+    # approvals into no-ops under test.
+    "DRY_RUN": "false",
 }
 
 
