@@ -6,7 +6,7 @@ variables / secrets. Everything else should depend on `get_settings()`.
 
 from functools import lru_cache
 
-from pydantic import ValidationError
+from pydantic import ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     # returned by /search (and, later, used as context by /ask). Range
     # [-1, 1]; the default only drops anti-correlated matches.
     rag_min_score: float = 0.0
+
+    @field_validator("webhook_secret", "app_api_key")
+    @classmethod
+    def _secret_is_not_blank(cls, value: str) -> str:
+        # A blank webhook secret would make every HMAC trivially forgeable,
+        # so refuse to start rather than fail open.
+        if not value.strip():
+            raise ValueError("must not be empty or whitespace")
+        return value
 
 
 @lru_cache

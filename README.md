@@ -188,8 +188,7 @@ pending action of the routed type, and no Nylas call or approval.
   which has no authentication. Don't leave one running, and don't
   deploy this as-is.
 - **Known open issues** from a security review, not yet fixed:
-  empty `WEBHOOK_SECRET`/`APP_API_KEY` values are accepted at
-  startup; any `PROCESSING_MODE` other than `test` processes all mail;
+  any `PROCESSING_MODE` other than `test` processes all mail;
   the webhook stores raw payloads after checking only the signature
   and `id`, not the full `WebhookEvent` schema; the `Dockerfile`
   doesn't start the API server and has no `.dockerignore`; archive's

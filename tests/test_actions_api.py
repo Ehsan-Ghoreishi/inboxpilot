@@ -1,5 +1,6 @@
 """Unit tests for /actions auth and error mapping — no database."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -75,8 +76,11 @@ def test_wrong_key_is_401(client, mock_service, method, path):
 
 
 def test_empty_configured_key_never_matches(client, mock_service, monkeypatch):
-    monkeypatch.setenv("APP_API_KEY", "")
-    get_settings.cache_clear()
+    # Settings now refuse a blank APP_API_KEY at startup; this checks the
+    # auth dependency still fails closed if one ever reaches it.
+    monkeypatch.setattr(
+        "app.api.auth.get_settings", lambda: SimpleNamespace(app_api_key="")
+    )
 
     response = client.post("/actions/1/approve", headers={"X-API-Key": ""})
 

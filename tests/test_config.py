@@ -124,3 +124,14 @@ def test_rag_min_score_is_overridable(monkeypatch):
     monkeypatch.setenv("RAG_MIN_SCORE", "0.3")
 
     assert get_settings().rag_min_score == 0.3
+
+
+@pytest.mark.parametrize("name", ["WEBHOOK_SECRET", "APP_API_KEY"])
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_secret_is_rejected(monkeypatch, name, blank):
+    _set_required_env(monkeypatch, **{name: blank})
+
+    with pytest.raises(RuntimeError) as exc_info:
+        get_settings()
+
+    assert name in str(exc_info.value)
