@@ -51,10 +51,13 @@ class Settings(BaseSettings):
     # Minimum cosine similarity (1 - distance) for a retrieved email to be
     # returned by /search or used as context by /ask. Range [-1, 1].
     # Calibrated for text-embedding-3-small on the retrieval eval
-    # (`eval/run_retrieval.py`): it refuses every unanswerable question
-    # and keeps 19/20 answerable ones. Re-run the eval after changing
-    # EMBEDDING_MODEL, since scores aren't comparable across models.
-    rag_min_score: float = 0.45
+    # (`eval/run_retrieval.py`): it keeps all 20 answerable questions,
+    # 0.053 below the lowest answerable top-1 score (0.353). It is a cost
+    # guard that skips the model when nothing is close; precision comes
+    # from the model's `answerable` flag (measured by `eval/run_ask.py`).
+    # Re-run the evals after changing EMBEDDING_MODEL, since scores
+    # aren't comparable across models.
+    rag_min_score: float = 0.30
 
     @field_validator("webhook_secret", "app_api_key")
     @classmethod

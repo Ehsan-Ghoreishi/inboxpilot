@@ -116,14 +116,14 @@ def test_get_settings_is_cached(monkeypatch):
 def test_rag_min_score_defaults_to_calibrated_value(monkeypatch):
     _set_required_env(monkeypatch)
 
-    assert get_settings().rag_min_score == 0.45
+    assert get_settings().rag_min_score == 0.30
 
 
 def test_rag_min_score_is_overridable(monkeypatch):
     _set_required_env(monkeypatch)
-    monkeypatch.setenv("RAG_MIN_SCORE", "0.3")
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.5")
 
-    assert get_settings().rag_min_score == 0.3
+    assert get_settings().rag_min_score == 0.5
 
 
 @pytest.mark.parametrize("name", ["WEBHOOK_SECRET", "APP_API_KEY"])

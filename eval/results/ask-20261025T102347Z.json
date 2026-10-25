@@ -1,0 +1,563 @@
+{
+  "run": {
+    "timestamp": "2026-10-25T10:23:47.068228+00:00",
+    "model": "gpt-4o",
+    "prompt_version": "ask_v1",
+    "embedding_model": "text-embedding-3-small",
+    "min_score": 0.3,
+    "corpus": "/Users/ehsanghoreishi/inboxpilot/eval/dataset.jsonl",
+    "corpus_sha256": "506d4707298786359633b0e02eca22399312c4a35370e05d21198a8add061d0d",
+    "corpus_size": 50,
+    "dataset": "/Users/ehsanghoreishi/inboxpilot/eval/retrieval_dataset.jsonl",
+    "dataset_sha256": "b683ea35f0ba703eb1e9098dd404f7b7bcab579ab00cae90d6d854cabf79c8c4",
+    "prices_usd_per_mtok": {
+      "input": 2.5,
+      "output": 10.0
+    }
+  },
+  "summary": {
+    "n": 25,
+    "errors": 0,
+    "answerable": {
+      "n": 20,
+      "answered": 20,
+      "answered_rate": 1.0,
+      "false_refusals": {
+        "threshold": 0,
+        "llm": 0,
+        "invalid_answer": 0
+      },
+      "citations_valid": 20,
+      "citation_validity_rate": 1.0,
+      "mean_citation_precision": 1.0
+    },
+    "unanswerable": {
+      "n": 5,
+      "refused": 5,
+      "refusal_rate": 1.0,
+      "refused_by_threshold": 1,
+      "refused_by_llm": 4,
+      "refused_invalid_answer": 0
+    },
+    "usage": {
+      "mean_latency_ms": 1287.04,
+      "mean_llm_calls": 0.96,
+      "mean_input_tokens": 1166.6,
+      "mean_output_tokens": 35.68,
+      "estimated_cost_usd_per_question": 0.0032733
+    }
+  },
+  "items": [
+    {
+      "id": "q-01",
+      "question": "Which recruiter contacted me about a Staff ML Engineer role and what was the salary range?",
+      "expected_email_ids": [
+        "rec-04"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Sam Okafor contacted you about a Staff ML Engineer role, and the salary range is 190-230k plus equity.",
+        "cited_ids": [
+          "rec-04"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1360,
+        "output_tokens": 40,
+        "latency_ms": 1857
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-02",
+      "question": "Who reached out about a fully remote contract data engineering job?",
+      "expected_email_ids": [
+        "rec-02"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Marco Bellini reached out about a fully remote contract Data Engineer role with a fintech client.",
+        "cited_ids": [
+          "rec-02"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1362,
+        "output_tokens": 32,
+        "latency_ms": 1497
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-03",
+      "question": "When is my onsite interview and what do I need to bring?",
+      "expected_email_ids": [
+        "int-02"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Your onsite interview is on Thursday, March 12, from 9:30 to 15:00 at 12 Example Street. You need to bring a photo ID.",
+        "cited_ids": [
+          "int-02"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1309,
+        "output_tokens": 49,
+        "latency_ms": 1945
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-04",
+      "question": "Which interviewer asked to reschedule our call to Friday?",
+      "expected_email_ids": [
+        "int-04"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Ben Adeyemi from Stratacore asked to reschedule the interview to Friday, March 6 at 4pm ET.",
+        "cited_ids": [
+          "int-04"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1281,
+        "output_tokens": 40,
+        "latency_ms": 1249
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-05",
+      "question": "When is my final round with the VP of Engineering?",
+      "expected_email_ids": [
+        "int-05"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Your final round with the VP of Engineering is on Monday, March 9 at 11:00 via video call.",
+        "cited_ids": [
+          "int-05"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1346,
+        "output_tokens": 38,
+        "latency_ms": 1708
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-06",
+      "question": "What is the deadline for the REST API take-home project?",
+      "expected_email_ids": [
+        "asm-01"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "The deadline for the REST API take-home project from Tidewater is Friday, March 6 at 23:59 UTC.",
+        "cited_ids": [
+          "asm-01"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1285,
+        "output_tokens": 39,
+        "latency_ms": 1476
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-07",
+      "question": "Which coding assessment link expires after 72 hours?",
+      "expected_email_ids": [
+        "asm-02"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "The coding assessment link for Ironleaf expires after 72 hours.",
+        "cited_ids": [
+          "asm-02"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1287,
+        "output_tokens": 27,
+        "latency_ms": 1303
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-08",
+      "question": "Do I have a take-home exercise due tomorrow?",
+      "expected_email_ids": [
+        "asm-03"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Yes, you have a take-home exercise due tomorrow, March 3, by end of day Pacific, from Sable Point.",
+        "cited_ids": [
+          "asm-03"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1286,
+        "output_tokens": 40,
+        "latency_ms": 1433
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-09",
+      "question": "Which rejection mentioned my system design skills?",
+      "expected_email_ids": [
+        "rej-02"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "The rejection that mentioned your system design skills is from Aisha Rahman at CobaltWay, saying the panel was impressed with your system design skills but felt the role needs deeper frontend experience.",
+        "cited_ids": [
+          "rej-02"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1285,
+        "output_tokens": 52,
+        "latency_ms": 1314
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-10",
+      "question": "Was any position put on hold because of budget changes?",
+      "expected_email_ids": [
+        "rej-05"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "The Data Platform Engineer position was put on hold due to a change in budget.",
+        "cited_ids": [
+          "rej-05"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 861,
+        "output_tokens": 30,
+        "latency_ms": 1262
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-11",
+      "question": "Did anyone tell me the Site Reliability Engineer position was already filled?",
+      "expected_email_ids": [
+        "rej-03"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Yes, Pinecrest informed you that the Site Reliability Engineer position has been filled.",
+        "cited_ids": [
+          "rej-03"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1264,
+        "output_tokens": 30,
+        "latency_ms": 1007
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-12",
+      "question": "Which German companies invited me to an interview?",
+      "expected_email_ids": [
+        "int-06-de",
+        "int-07-de"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Nordlicht Software invited you to an interview for a video call on Wednesday, 11th March 2026 at 14:00.",
+        "cited_ids": [
+          "int-06-de"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1340,
+        "output_tokens": 42,
+        "latency_ms": 1048
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-13",
+      "question": "Which coding exercises are due on Friday, March 6?",
+      "expected_email_ids": [
+        "asm-01",
+        "asm-06-de"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "The coding exercise for Blauwerk is due on Friday, March 6, 2026, by 18:00 Uhr.",
+        "cited_ids": [
+          "asm-06-de"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1302,
+        "output_tokens": 40,
+        "latency_ms": 1204
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-14",
+      "question": "Which recruiters contacted me about backend or DevOps jobs in Germany?",
+      "expected_email_ids": [
+        "rec-06-de",
+        "rec-07-de"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Two recruiters contacted you about backend or DevOps jobs in Germany:\n\n1. Katrin Vogel from Fernwerk GmbH, regarding a Backend-Entwickler position in Hamburg (Email 1).\n2. Jonas Richter from Personalwerk, regarding a DevOps Engineer position for a software company in Munich (Email 2).",
+        "cited_ids": [
+          "rec-06-de",
+          "rec-07-de"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1308,
+        "output_tokens": 84,
+        "latency_ms": 1298
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-15",
+      "question": "Who suggested I be considered for an SRE role instead of the Data Analyst position?",
+      "expected_email_ids": [
+        "rec-09-amb"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "The Recruiting Team at Vanta Global suggested you be considered for an SRE role instead of the Data Analyst position.",
+        "cited_ids": [
+          "rec-09-amb"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1312,
+        "output_tokens": 37,
+        "latency_ms": 1128
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-16",
+      "question": "Was the deadline for any of my assessments extended?",
+      "expected_email_ids": [
+        "asm-09-amb"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Yes, the deadline for the assessment from Greyfinch was extended to Sunday, March 8.",
+        "cited_ids": [
+          "asm-09-amb"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1287,
+        "output_tokens": 34,
+        "latency_ms": 1056
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-17",
+      "question": "Do I have a live pair-programming session scheduled?",
+      "expected_email_ids": [
+        "int-08-amb"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Yes, you have a live pair-programming session scheduled with Foldline on Tuesday, March 10 at 1pm PT.",
+        "cited_ids": [
+          "int-08-amb"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1289,
+        "output_tokens": 40,
+        "latency_ms": 1100
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-18",
+      "question": "Who offered to put in a referral for me?",
+      "expected_email_ids": [
+        "oth-09-amb"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Jordan Ellis offered to put in a referral for you at a smaller startup.",
+        "cited_ids": [
+          "oth-09-amb"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1085,
+        "output_tokens": 29,
+        "latency_ms": 1149
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-19",
+      "question": "Do I have dinner plans this weekend?",
+      "expected_email_ids": [
+        "oth-05"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "Yes, you have dinner plans on Saturday at the Thai place around 7 PM with Alex.",
+        "cited_ids": [
+          "oth-05"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 842,
+        "output_tokens": 33,
+        "latency_ms": 1846
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "q-20",
+      "question": "Which companies confirmed they received my application?",
+      "expected_email_ids": [
+        "oth-03",
+        "oth-07-de"
+      ],
+      "run": {
+        "answerable": true,
+        "answer": "The companies that confirmed receipt of your application are Westbrook and Lindenberg.",
+        "cited_ids": [
+          "oth-03",
+          "oth-07-de"
+        ],
+        "llm_calls": 1,
+        "input_tokens": 1254,
+        "output_tokens": 31,
+        "latency_ms": 1230
+      },
+      "error": null,
+      "refused_by": null,
+      "outcome": "answered ok"
+    },
+    {
+      "id": "u-01",
+      "question": "What start date and signing bonus are in my offer letter?",
+      "expected_email_ids": [],
+      "run": {
+        "answerable": false,
+        "answer": "None of the matching emails contain information about a start date or signing bonus.",
+        "cited_ids": [],
+        "llm_calls": 1,
+        "input_tokens": 983,
+        "output_tokens": 28,
+        "latency_ms": 1637
+      },
+      "error": null,
+      "refused_by": "llm",
+      "outcome": "refused ok (llm)"
+    },
+    {
+      "id": "u-02",
+      "question": "What did my landlord say about the rent increase?",
+      "expected_email_ids": [],
+      "run": {
+        "answerable": false,
+        "answer": "Insufficient evidence in stored emails.",
+        "cited_ids": [],
+        "llm_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "latency_ms": 145
+      },
+      "error": null,
+      "refused_by": "threshold",
+      "outcome": "refused ok (threshold)"
+    },
+    {
+      "id": "u-03",
+      "question": "When is my dentist appointment next week?",
+      "expected_email_ids": [],
+      "run": {
+        "answerable": false,
+        "answer": "None of the matching emails say when the dentist appointment is.",
+        "cited_ids": [],
+        "llm_calls": 1,
+        "input_tokens": 972,
+        "output_tokens": 25,
+        "latency_ms": 1121
+      },
+      "error": null,
+      "refused_by": "llm",
+      "outcome": "refused ok (llm)"
+    },
+    {
+      "id": "u-04",
+      "question": "Which company agreed to sponsor my work visa?",
+      "expected_email_ids": [],
+      "run": {
+        "answerable": false,
+        "answer": "None of the matching emails mention sponsorship for a work visa.",
+        "cited_ids": [],
+        "llm_calls": 1,
+        "input_tokens": 1176,
+        "output_tokens": 25,
+        "latency_ms": 988
+      },
+      "error": null,
+      "refused_by": "llm",
+      "outcome": "refused ok (llm)"
+    },
+    {
+      "id": "u-05",
+      "question": "What time does my flight to the company offsite depart?",
+      "expected_email_ids": [],
+      "run": {
+        "answerable": false,
+        "answer": "None of the matching emails mention a flight to a company offsite.",
+        "cited_ids": [],
+        "llm_calls": 1,
+        "input_tokens": 1089,
+        "output_tokens": 27,
+        "latency_ms": 1175
+      },
+      "error": null,
+      "refused_by": "llm",
+      "outcome": "refused ok (llm)"
+    }
+  ]
+}
