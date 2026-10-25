@@ -107,6 +107,22 @@ failed executions. Even then the blast radius is bounded: a draft is
 created but never sent, and archive is a folder move, not a delete. The
 `/actions` endpoints require `X-API-Key`, compared in constant time.
 
+### Retrieval pipeline
+
+```mermaid
+flowchart LR
+    I["ingest<br/>triage commits the email"] --> E["embed<br/>subject + sender + date + body,<br/>text-embedding-3-small"]
+    E --> V[(email_embeddings<br/>one row per email + model)]
+    V --> S["search<br/>cosine top-k + SQL filters,<br/>score ≥ RAG_MIN_SCORE"]
+    S --> A{"ask:<br/>anything left?"}
+    A -->|no| R["answerable: false<br/>model never called"]
+    A -->|yes| M["answerer (OpenAI)<br/>cites [1]..[k], citations checked"]
+```
+
+`/search` and `/ask` share the same retrieval step
+(`app/services/search.py: retrieve_emails`), so a threshold or filter
+change affects both identically. The eval below runs that same function.
+
 ### Semantic search
 
 `POST /search` (requires `X-API-Key`) embeds the query with the same
@@ -134,8 +150,9 @@ best first, where `score` is cosine similarity (`1 - distance`).
   vectors.
 - **Idempotent embedding.** Each embedding stores a hash of its input
   text; an unchanged email is never re-sent to OpenAI.
-- **`RAG_MIN_SCORE`** (default `0.0`) drops weak matches, here and in
-  `/ask`.
+- **`RAG_MIN_SCORE`** (default `0.45`) drops weak matches, here and in
+  `/ask`. The value comes from the retrieval eval, not a guess (see
+  [Evaluation](#retrieval)); it is specific to `text-embedding-3-small`.
 
 ### Asking questions
 
@@ -156,9 +173,22 @@ and filters as `/search`.
 - **Retrieval is `/search`.** The question is embedded and the closest
   emails passing `RAG_MIN_SCORE` and the filters become the context,
   each body truncated to 3000 characters.
-- **No evidence, no model call.** If nothing passes, the response is
-  `{answerable: false, answer: "Insufficient evidence in stored
-  emails.", citations: []}` and the model is never called.
+- **No evidence, no model call.** If nothing passes `RAG_MIN_SCORE`,
+  the response is a fixed refusal and the model is never called, so it
+  has nothing to invent an answer from. Against the eval corpus:
+
+  ```sh
+  curl -X POST localhost:8000/ask -H "X-API-Key: $APP_API_KEY" \
+    -H "content-type: application/json" \
+    -d '{"question": "What did my landlord say about the rent increase?"}'
+  # {"answerable":false,"answer":"Insufficient evidence in stored emails.","citations":[],"sources":[]}
+  ```
+
+  Only similarity decides this. A question that is off-topic but
+  *sounds* like job-search mail (e.g. "what time does my flight to the
+  company offsite depart?", top-1 score 0.41) gets close to the
+  threshold; if it passes, the model sees the context and is expected
+  to answer `answerable: false` itself.
 - **Emails are untrusted.** Each is numbered `[1]..[k]` and rendered in
   the same delimited, `> `-quoted `<untrusted_email>` block as triage
   uses, and the versioned prompt (`app/agents/prompts/ask_v1.md`) tells
@@ -232,8 +262,25 @@ pending action of the routed type, and no Nylas call or approval.
   doesn't start the API server and has no `.dockerignore`; archive's
   folder semantics are unverified for Gmail.
 - Email bodies are passed to the model as HTML, unconverted.
+- **Retrieval numbers come from a tiny synthetic corpus.** 50 short,
+  clean, single-topic emails are much easier than a real inbox (long
+  threads, quoted replies, HTML, near-duplicates), so expect real
+  recall to be lower.
+- **`RAG_MIN_SCORE` is calibrated on 25 questions.** The answerable and
+  unanswerable top-1 scores overlap (0.353–0.787 vs. 0.209–0.410), so
+  no threshold is perfect: 0.45 refuses all 5 unanswerable questions
+  but also refuses one answerable one. Five unanswerable questions is
+  far too few to estimate a false-answer rate; treat 0.45 as a starting
+  point, and re-run the eval after changing `EMBEDDING_MODEL` (scores
+  aren't comparable across models).
+- **Single-embedding retrieval.** Each email is one vector over its
+  first 8000 characters; there is no chunking, hybrid keyword search,
+  or reranking. Questions with several right answers suffer most (see
+  q-12 and q-13 below).
 
 ## Evaluation
+
+### Classification
 
 `eval/dataset.jsonl` holds 50 synthetic, labeled emails — 10 per
 category, including 10 German, 10 deliberately ambiguous, and 5
@@ -253,3 +300,57 @@ the full run to `eval/results/<timestamp>.json`.
 **Results:** no eval run has been recorded yet. Numbers will be added
 here copied verbatim from an `eval/results/*.json` file, together with
 the model and prompt version that produced them.
+
+### Retrieval
+
+`eval/retrieval_dataset.jsonl` holds 25 questions over the same 50
+emails: 20 answerable, each labeled with the email ids that answer it
+(4 have two right answers, several are English questions about German
+emails), and 5 with no answer in the corpus. The questions and labels
+were drafted with an AI assistant and have not yet been independently
+reviewed. Run it with:
+
+```sh
+uv run python -m eval.run_retrieval [--min-score X]
+```
+
+It loads the corpus into a separate `<db>_eval` database (created,
+migrated, and emptied on each run — never the dev database), embeds it
+with the real configured model, and retrieves for every question
+without a threshold, so every score is visible. Results go to
+`eval/results/retrieval-<timestamp>.json`.
+
+**Results** (`eval/results/retrieval-20261025T093150Z.json`,
+`text-embedding-3-small`, corpus of 50):
+
+| Answerable (n=20) | |
+|---|---|
+| recall@3 | 0.925 |
+| recall@5 | 0.950 |
+| MRR (depth 20) | 0.963 |
+
+19 of 20 questions ranked a correct email first. The two imperfect
+ones are both multi-answer questions: q-13 ("coding exercises due Friday, March 6")
+ranked a challenge due March 7 first, with the first correct email at
+rank 4, and q-12 ("German companies that invited me to interview") found
+only one of its two emails in the top 5.
+
+To calibrate `RAG_MIN_SCORE`, the eval compares each question's top-1
+score, since `/ask` refuses exactly when the top-1 email is below the
+threshold:
+
+| min_score | answerable kept | unanswerable refused |
+|---|---|---|
+| 0.00 (old default) | 20/20 | 0/5 |
+| 0.35 | 20/20 | 4/5 |
+| 0.40 | 19/20 | 4/5 |
+| **0.45 (default)** | **19/20** | **5/5** |
+| 0.50 | 18/20 | 5/5 |
+| 0.55 | 15/20 | 5/5 |
+
+The eval's suggested threshold is the cut that handles the most
+questions correctly, placed in the middle of the widest gap between
+scores: 0.446, between the highest unanswerable question (0.410) and
+the next answerable one (0.482). The answerable question it gives up is
+q-18 ("who offered to put in a referral for me?", 0.353): its email is
+ranked first, just with a low score.
