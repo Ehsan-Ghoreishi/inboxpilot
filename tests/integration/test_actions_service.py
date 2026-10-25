@@ -1,5 +1,6 @@
 """app/services/actions.py: real DB, Nylas integration mocked."""
 
+import threading
 from datetime import date, datetime, timezone
 from unittest.mock import patch
 
@@ -208,6 +209,51 @@ def test_double_approve_raises_and_calls_nylas_only_once(test_engine):
             approve(pending_action.id)
 
     mock_archive.assert_called_once()
+    assert _audit_actions(test_engine, pending_action.id) == [
+        "created",
+        "approved",
+        "executed",
+    ]
+
+
+def test_concurrent_approvals_execute_only_once(test_engine):
+    """Two approvals racing on the same action: the second must wait for
+    the first's row lock, then see it is no longer pending."""
+    pending_action = create_pending_action(
+        _email(), _analysis(SuggestedAction.NONE), ActionType.ARCHIVE
+    )
+    first_call_started = threading.Event()
+    release = threading.Event()
+
+    def slow_archive(*_args) -> None:
+        first_call_started.set()
+        release.wait(timeout=5)
+
+    outcomes: list[str] = []
+
+    def run_approve() -> None:
+        try:
+            approve(pending_action.id)
+            outcomes.append("executed")
+        except PendingActionError:
+            outcomes.append("refused")
+
+    with patch(
+        "app.services.actions.archive_message", side_effect=slow_archive
+    ) as mock_archive:
+        first = threading.Thread(target=run_approve)
+        first.start()
+        assert first_call_started.wait(timeout=5)
+        second = threading.Thread(target=run_approve)
+        second.start()
+        # Give the second approval time to reach Nylas if it isn't blocked.
+        second.join(timeout=1)
+        release.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+    mock_archive.assert_called_once()
+    assert sorted(outcomes) == ["executed", "refused"]
     assert _audit_actions(test_engine, pending_action.id) == [
         "created",
         "approved",

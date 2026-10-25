@@ -161,6 +161,13 @@ def _execute_dry_run(pending_action: PendingAction) -> str:
     return fake_id
 
 
+def _lock_pending_action(session: Session, pending_action_id: int) -> PendingAction:
+    """Load the action with a row lock (`SELECT ... FOR UPDATE`) held until
+    the transaction ends, so a concurrent approve/reject of the same action
+    waits, then sees the decided status instead of also acting on it."""
+    return session.get_one(PendingAction, pending_action_id, with_for_update=True)
+
+
 def approve(pending_action_id: int, actor: str = "human") -> PendingAction:
     """Approve a pending action: marks it `approved`, executes the Nylas
     action (or, under DRY_RUN, a logged no-op), then marks it `executed`.
@@ -180,7 +187,7 @@ def approve(pending_action_id: int, actor: str = "human") -> PendingAction:
     dry_run = get_settings().dry_run
 
     with session_scope() as session:
-        pending_action = session.get_one(PendingAction, pending_action_id)
+        pending_action = _lock_pending_action(session, pending_action_id)
         if pending_action.status != PendingActionStatus.PENDING:
             raise PendingActionError(
                 f"Pending action {pending_action_id} is "
@@ -242,7 +249,7 @@ def reject(pending_action_id: int, actor: str = "human") -> PendingAction:
     """Reject a pending action. Only a `pending` action can be rejected —
     rejecting an already-decided action raises `PendingActionError`."""
     with session_scope() as session:
-        pending_action = session.get_one(PendingAction, pending_action_id)
+        pending_action = _lock_pending_action(session, pending_action_id)
         if pending_action.status != PendingActionStatus.PENDING:
             raise PendingActionError(
                 f"Pending action {pending_action_id} is "
