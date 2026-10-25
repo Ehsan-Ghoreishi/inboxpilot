@@ -8,7 +8,7 @@ session bound to a test database/transaction directly.
 
 from datetime import datetime
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -16,6 +16,7 @@ from app.database.models import (
     ActionType,
     AuditLog,
     Classification,
+    EmailEmbedding,
     EmailRecord,
     PendingAction,
     PendingActionStatus,
@@ -205,5 +206,66 @@ def list_unprocessed_raw_events(session: Session) -> list[RawEvent]:
             select(RawEvent)
             .where(~exists().where(EmailRecord.nylas_message_id == message_id))
             .order_by(RawEvent.id)
+        )
+    )
+
+
+def get_email_by_message_id(session: Session, message_id: str) -> EmailRecord | None:
+    return session.scalars(
+        select(EmailRecord).where(EmailRecord.nylas_message_id == message_id)
+    ).one_or_none()
+
+
+def get_embedding_content_hash(
+    session: Session, email_id: int, model: str
+) -> str | None:
+    return session.scalars(
+        select(EmailEmbedding.content_hash).where(
+            EmailEmbedding.email_id == email_id, EmailEmbedding.model == model
+        )
+    ).one_or_none()
+
+
+def upsert_embedding(
+    session: Session,
+    *,
+    email_id: int,
+    model: str,
+    content_hash: str,
+    embedding: list[float],
+) -> None:
+    """Insert or replace the embedding for (email_id, model).
+
+    An existing row is only overwritten when its `content_hash` differs,
+    so re-upserting unchanged content is a no-op.
+    """
+    stmt = pg_insert(EmailEmbedding).values(
+        email_id=email_id,
+        model=model,
+        dim=len(embedding),
+        content_hash=content_hash,
+        embedding=embedding,
+    )
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_email_embeddings_email_id_model",
+        set_={
+            "dim": stmt.excluded.dim,
+            "content_hash": stmt.excluded.content_hash,
+            "embedding": stmt.excluded.embedding,
+            "created_at": func.now(),
+        },
+        where=EmailEmbedding.content_hash != stmt.excluded.content_hash,
+    )
+    session.execute(stmt)
+    session.flush()
+
+
+def list_email_ids_without_embedding(session: Session, model: str) -> list[int]:
+    has_embedding = exists().where(
+        EmailEmbedding.email_id == EmailRecord.id, EmailEmbedding.model == model
+    )
+    return list(
+        session.scalars(
+            select(EmailRecord.id).where(~has_embedding).order_by(EmailRecord.id)
         )
     )

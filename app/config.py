@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # still marked executed, with its audit rows flagged dry_run. For
     # offline development without a live grant.
     dry_run: bool = False
+    # OpenAI embedding model for email embeddings. Must produce vectors
+    # of `app.database.models.EMBEDDING_DIM` (1536) dimensions.
+    embedding_model: str = "text-embedding-3-small"
 
 
 @lru_cache
