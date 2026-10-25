@@ -1,0 +1,25 @@
+{"id": "q-01", "question": "Which recruiter contacted me about a Staff ML Engineer role and what was the salary range?", "expected_email_ids": ["rec-04"]}
+{"id": "q-02", "question": "Who reached out about a fully remote contract data engineering job?", "expected_email_ids": ["rec-02"]}
+{"id": "q-03", "question": "When is my onsite interview and what do I need to bring?", "expected_email_ids": ["int-02"]}
+{"id": "q-04", "question": "Which interviewer asked to reschedule our call to Friday?", "expected_email_ids": ["int-04"]}
+{"id": "q-05", "question": "When is my final round with the VP of Engineering?", "expected_email_ids": ["int-05"]}
+{"id": "q-06", "question": "What is the deadline for the REST API take-home project?", "expected_email_ids": ["asm-01"]}
+{"id": "q-07", "question": "Which coding assessment link expires after 72 hours?", "expected_email_ids": ["asm-02"]}
+{"id": "q-08", "question": "Do I have a take-home exercise due tomorrow?", "expected_email_ids": ["asm-03"]}
+{"id": "q-09", "question": "Which rejection mentioned my system design skills?", "expected_email_ids": ["rej-02"]}
+{"id": "q-10", "question": "Was any position put on hold because of budget changes?", "expected_email_ids": ["rej-05"]}
+{"id": "q-11", "question": "Did anyone tell me the Site Reliability Engineer position was already filled?", "expected_email_ids": ["rej-03"]}
+{"id": "q-12", "question": "Which German companies invited me to an interview?", "expected_email_ids": ["int-06-de", "int-07-de"]}
+{"id": "q-13", "question": "Which coding exercises are due on Friday, March 6?", "expected_email_ids": ["asm-01", "asm-06-de"]}
+{"id": "q-14", "question": "Which recruiters contacted me about backend or DevOps jobs in Germany?", "expected_email_ids": ["rec-06-de", "rec-07-de"]}
+{"id": "q-15", "question": "Who suggested I be considered for an SRE role instead of the Data Analyst position?", "expected_email_ids": ["rec-09-amb"]}
+{"id": "q-16", "question": "Was the deadline for any of my assessments extended?", "expected_email_ids": ["asm-09-amb"]}
+{"id": "q-17", "question": "Do I have a live pair-programming session scheduled?", "expected_email_ids": ["int-08-amb"]}
+{"id": "q-18", "question": "Who offered to put in a referral for me?", "expected_email_ids": ["oth-09-amb"]}
+{"id": "q-19", "question": "Do I have dinner plans this weekend?", "expected_email_ids": ["oth-05"]}
+{"id": "q-20", "question": "Which companies confirmed they received my application?", "expected_email_ids": ["oth-03", "oth-07-de"]}
+{"id": "u-01", "question": "What start date and signing bonus are in my offer letter?", "expected_email_ids": []}
+{"id": "u-02", "question": "What did my landlord say about the rent increase?", "expected_email_ids": []}
+{"id": "u-03", "question": "When is my dentist appointment next week?", "expected_email_ids": []}
+{"id": "u-04", "question": "Which company agreed to sponsor my work visa?", "expected_email_ids": []}
+{"id": "u-05", "question": "What time does my flight to the company offsite depart?", "expected_email_ids": []}
