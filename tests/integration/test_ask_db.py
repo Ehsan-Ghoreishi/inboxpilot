@@ -94,6 +94,18 @@ def test_context_is_retrieved_emails_best_first_with_full_body(client, answerer)
     assert result["sources"][0]["score"] == pytest.approx(math.cos(0.1), abs=1e-5)
 
 
+def test_duplicate_content_reaches_the_model_once(client, answerer):
+    with session_scope() as session:
+        near = _store(session, key="near", angle=0.1, content_hash="same")
+        _store(session, key="copy", angle=0.2, content_hash="same")
+        other = _store(session, key="other", angle=0.5)
+
+    result = _ask(client, top_k=2)
+
+    assert answerer.context_ids() == [near, other]
+    assert result["citations"] == [near, other]
+
+
 def test_min_score_gates_which_emails_reach_the_model(client, answerer, monkeypatch):
     with session_scope() as session:
         near = _store(session, key="near", angle=0.1)

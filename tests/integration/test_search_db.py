@@ -41,6 +41,7 @@ def _store(
     sender_name: str | None = "Test Sender",
     received_at: datetime = datetime(2026, 1, 15, tzinfo=timezone.utc),
     model: str = MODEL,
+    content_hash: str | None = None,
 ) -> int:
     email = EmailRecord(
         nylas_message_id=f"msg-{key}",
@@ -68,7 +69,7 @@ def _store(
         session,
         email_id=email.id,
         model=model,
-        content_hash=key,
+        content_hash=content_hash or key,
         embedding=_vector(angle),
     )
     return email.id
@@ -125,6 +126,33 @@ def test_top_k_limits_results(client):
         ids = [_store(session, key=f"e{i}", angle=0.1 * i) for i in range(4)]
 
     assert [r["email_id"] for r in _search(client, top_k=2)] == ids[:2]
+
+
+def test_identical_content_collapses_to_best_scoring_copy(client):
+    with session_scope() as session:
+        best = _store(session, key="best", angle=0.1, content_hash="same")
+        _store(session, key="copy", angle=0.2, content_hash="same")
+        _store(session, key="copy2", angle=0.3, content_hash="same")
+        distinct = _store(session, key="distinct", angle=0.4)
+
+    # Duplicates don't take slots: the 2 results are 2 different contents.
+    assert [r["email_id"] for r in _search(client, top_k=2)] == [best, distinct]
+
+
+def test_filters_apply_before_collapsing_duplicates(client):
+    with session_scope() as session:
+        _store(session, key="best", angle=0.1, content_hash="same", category="other")
+        invite = _store(
+            session,
+            key="invite",
+            angle=0.3,
+            content_hash="same",
+            category="interview_invite",
+        )
+
+    assert [r["email_id"] for r in _search(client, category="interview_invite")] == [
+        invite
+    ]
 
 
 def test_other_models_embeddings_are_ignored(client):

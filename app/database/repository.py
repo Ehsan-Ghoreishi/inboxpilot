@@ -8,7 +8,7 @@ session bound to a test database/transaction directly.
 
 from datetime import datetime
 
-from sqlalchemy import exists, func, select, text
+from sqlalchemy import exists, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -292,16 +292,26 @@ def search_email_embeddings(
 
     Returns `(email, score)` pairs, best first, where score is
     `1 - distance` and at least `min_score`. `category` matches the
-    email's latest classification.
+    email's latest classification. Emails whose embedded content is
+    identical (same `content_hash`) collapse to the best-scoring one, so
+    duplicates don't use up `top_k` slots.
     """
     distance = EmailEmbedding.embedding.cosine_distance(query_embedding)
-    score = (1 - distance).label("score")
+    score = 1 - distance
     stmt = (
-        select(EmailRecord, score)
+        select(
+            EmailRecord.id.label("email_id"),
+            distance.label("distance"),
+            score.label("score"),
+            func.row_number()
+            .over(
+                partition_by=EmailEmbedding.content_hash,
+                order_by=(distance, EmailRecord.id),
+            )
+            .label("rank_in_hash"),
+        )
         .join(EmailEmbedding, EmailEmbedding.email_id == EmailRecord.id)
         .where(EmailEmbedding.model == model, score >= min_score)
-        .order_by(distance, EmailRecord.id)
-        .limit(top_k)
     )
     if category is not None:
         latest_category = (
@@ -323,8 +333,16 @@ def search_email_embeddings(
     if date_to is not None:
         stmt = stmt.where(EmailRecord.received_at <= date_to)
 
-    # With filters, an HNSW scan can otherwise stop after `ef_search`
-    # candidates and return fewer than `top_k` matches; iterative scan
-    # keeps going until enough rows pass the filters.
-    session.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
-    return [(email, row_score) for email, row_score in session.execute(stmt)]
+    # Filters apply before collapsing, so a duplicate that matches them
+    # isn't hidden by a better-scoring copy that doesn't. The window
+    # function rules out an HNSW index-ordered scan: candidates are scored
+    # exactly, which is fine at a single inbox's size.
+    candidates = stmt.subquery()
+    collapsed = (
+        select(EmailRecord, candidates.c.score)
+        .join(candidates, candidates.c.email_id == EmailRecord.id)
+        .where(candidates.c.rank_in_hash == 1)
+        .order_by(candidates.c.distance, EmailRecord.id)
+        .limit(top_k)
+    )
+    return [(email, row_score) for email, row_score in session.execute(collapsed)]
