@@ -9,8 +9,21 @@ repository layer) would collide on the name otherwise.
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Enum as SAEnum, ForeignKey, false, func
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Enum as SAEnum,
+    ForeignKey,
+    Index,
+    Text,
+    UniqueConstraint,
+    false,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+EMBEDDING_DIM = 1536
 
 
 class Base(DeclarativeBase):
@@ -55,6 +68,44 @@ class EmailRecord(Base):
     pending_actions: Mapped[list["PendingAction"]] = relationship(
         back_populates="email"
     )
+    # passive_deletes: let the DB's ON DELETE CASCADE remove embeddings
+    # instead of SQLAlchemy loading and deleting them one by one.
+    embeddings: Mapped[list["EmailEmbedding"]] = relationship(
+        back_populates="email", passive_deletes=True
+    )
+
+
+class EmailEmbedding(Base):
+    """A vector embedding of an email's content, one per (email, model)."""
+
+    __tablename__ = "email_embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "email_id", "model", name="uq_email_embeddings_email_id_model"
+        ),
+        Index(
+            "ix_email_embeddings_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email_id: Mapped[int] = mapped_column(
+        ForeignKey("emails.id", ondelete="CASCADE")
+    )
+    model: Mapped[str] = mapped_column(Text)
+    dim: Mapped[int]
+    # Hash of the embedded text, so a stale embedding can be detected
+    # (and recomputed) when the source content changes.
+    content_hash: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    email: Mapped["EmailRecord"] = relationship(back_populates="embeddings")
 
 
 class Classification(Base):
