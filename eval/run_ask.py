@@ -12,7 +12,8 @@ then every question in `eval/retrieval_dataset.jsonl` goes through
 
 Answerable questions are scored on how often the model answers and
 whether its citations are expected emails (validity: all of them;
-precision: the fraction). Unanswerable questions are scored on refusals,
+precision: the fraction of citations that are expected; recall: the
+fraction of expected emails that were cited). Unanswerable questions are scored on refusals,
 split into those refused by the threshold (no model call) and those
 refused by the model. Latency is the wall time of `ask_question()`;
 cost counts model tokens only (not the question's embedding) and is only
@@ -111,6 +112,23 @@ def citation_precision(cited: Sequence[str], expected: Sequence[str]) -> float |
     return len(set(cited) & set(expected)) / len(set(cited))
 
 
+def citation_recall(cited: Sequence[str], expected: Sequence[str]) -> float | None:
+    if not expected:
+        return None
+    return len(set(cited) & set(expected)) / len(set(expected))
+
+
+def _answered_citation_scores(r: AskItemResult) -> tuple[float | None, float | None]:
+    """`(precision, recall)` for an answered answerable question, else
+    `(None, None)`: a refusal is already counted as a false refusal."""
+    if not (r.expects_answer and r.run and r.run.answerable):
+        return None, None
+    return (
+        citation_precision(r.run.cited_ids, r.expected_email_ids),
+        citation_recall(r.run.cited_ids, r.expected_email_ids),
+    )
+
+
 def question_cost(
     run: AskRun, input_usd_per_mtok: float | None, output_usd_per_mtok: float | None
 ) -> float | None:
@@ -165,6 +183,9 @@ def summarize(
             "mean_citation_precision": _mean_or_none(
                 [citation_precision(r.run.cited_ids, r.expected_email_ids) for r in answered]
             ),
+            "mean_citation_recall": _mean_or_none(
+                [citation_recall(r.run.cited_ids, r.expected_email_ids) for r in answered]
+            ),
         },
         "unanswerable": {
             "n": len(unanswerable),
@@ -215,15 +236,18 @@ def format_report(run_info: dict, results: Sequence[AskItemResult], summary: dic
         f"questions={summary['n']}  min_score={run_info['min_score']}  "
         f"errors={summary['errors']}",
         "",
-        f"{'question':<8}{'calls':>6}{'ms':>7}  {'cited':<24}{'expected':<24}outcome",
+        f"{'question':<8}{'calls':>6}{'ms':>7}  {'cited':<24}{'expected':<24}"
+        f"{'prec':>6}{'rec':>6}  outcome",
     ]
     for r in results:
         cited = ",".join(r.run.cited_ids) if r.run else ""
         calls = str(r.run.llm_calls) if r.run else "—"
         latency = str(r.run.latency_ms) if r.run else "—"
+        precision, recall = _answered_citation_scores(r)
         lines.append(
             f"{r.id:<8}{calls:>6}{latency:>7}  {cited or '—':<24}"
-            f"{','.join(r.expected_email_ids) or '—':<24}{_outcome(r)}"
+            f"{','.join(r.expected_email_ids) or '—':<24}"
+            f"{_fmt(precision, '.2f'):>6}{_fmt(recall, '.2f'):>6}  {_outcome(r)}"
         )
 
     a = summary["answerable"]
@@ -237,7 +261,8 @@ def format_report(run_info: dict, results: Sequence[AskItemResult], summary: dic
         + "  ".join(f"{k}={v}" for k, v in a["false_refusals"].items()),
         f"  citations valid {a['citations_valid']}/{a['answered']} "
         f"(rate {_fmt(a['citation_validity_rate'])}); "
-        f"mean citation precision {_fmt(a['mean_citation_precision'])}",
+        f"mean citation precision {_fmt(a['mean_citation_precision'])}, "
+        f"mean citation recall {_fmt(a['mean_citation_recall'])}",
         f"unanswerable (n={u['n']}): refused {u['refused']}/{u['n']} "
         f"(rate {_fmt(u['refusal_rate'])}); by threshold (0 model calls) "
         f"{u['refused_by_threshold']}, by model {u['refused_by_llm']}, "
@@ -290,6 +315,17 @@ def evaluate_item(item: RetrievalItem, asker: Asker) -> AskItemResult:
     return result
 
 
+def _item_record(r: AskItemResult) -> dict:
+    precision, recall = _answered_citation_scores(r)
+    return {
+        **r.model_dump(mode="json"),
+        "refused_by": refused_by(r.run) if r.run else None,
+        "citation_precision": precision,
+        "citation_recall": recall,
+        "outcome": _outcome(r),
+    }
+
+
 def run(
     args: argparse.Namespace,
     asker: Asker,
@@ -333,14 +369,7 @@ def run(
             {
                 "run": run_info,
                 "summary": summary,
-                "items": [
-                    {
-                        **r.model_dump(mode="json"),
-                        "refused_by": refused_by(r.run) if r.run else None,
-                        "outcome": _outcome(r),
-                    }
-                    for r in results
-                ],
+                "items": [_item_record(r) for r in results],
             },
             indent=2,
             ensure_ascii=False,

@@ -15,6 +15,7 @@ from eval.run_ask import (
     AskRun,
     _parse_args,
     citation_precision,
+    citation_recall,
     citations_valid,
     question_cost,
     recording_llm_usage,
@@ -75,6 +76,13 @@ def test_citation_precision():
     assert citation_precision([], ["a"]) is None
 
 
+def test_citation_recall():
+    assert citation_recall(["a"], ["a", "b"]) == 0.5
+    assert citation_recall(["a", "b", "x"], ["a", "b"]) == 1.0
+    assert citation_recall([], ["a"]) == 0.0
+    assert citation_recall(["a"], []) is None
+
+
 def test_cost_needs_both_prices_and_is_zero_without_model_calls():
     assert question_cost(_run(tokens=(1_000_000, 1_000_000)), 1.0, 4.0) == 5.0
     assert question_cost(_run(), None, 4.0) is None
@@ -85,7 +93,7 @@ def test_cost_needs_both_prices_and_is_zero_without_model_calls():
 def test_summary_counts_answers_citations_and_refusal_sources():
     results = [
         _item("q-1", ["a"], _run(cited=["a"])),
-        _item("q-2", ["b"], _run(cited=["b", "x"])),
+        _item("q-2", ["b", "y"], _run(cited=["b", "x"])),
         _item("q-3", ["c"], _run(False, calls=0)),
         _item("q-4", ["d"], None),
         _item("u-1", [], _run(False, calls=0)),
@@ -101,6 +109,7 @@ def test_summary_counts_answers_citations_and_refusal_sources():
     assert a["false_refusals"] == {THRESHOLD: 1, LLM: 0, INVALID: 0}
     assert (a["citations_valid"], a["citation_validity_rate"]) == (1, 0.5)
     assert a["mean_citation_precision"] == 0.75
+    assert a["mean_citation_recall"] == 0.75
     assert (u["refused"], u["refusal_rate"]) == (2, 2 / 3)
     assert (u["refused_by_threshold"], u["refused_by_llm"]) == (1, 1)
     # 4 model-calling questions at $0.002 each, 2 threshold refusals at $0.
@@ -160,6 +169,11 @@ def test_run_writes_results_and_reports_every_question(tmp_path):
     assert data["run"]["min_score"] == 0.3
     assert data["summary"]["answerable"]["answered"] == 20
     assert data["summary"]["answerable"]["citation_validity_rate"] == 1.0
+    # The fake asker cites only the first expected email.
+    items = {item["id"]: item for item in data["items"]}
+    assert items["q-12"]["citation_recall"] == 0.5
+    assert items["q-01"]["citation_recall"] == 1.0
+    assert items["u-01"]["citation_recall"] is None
     assert data["summary"]["unanswerable"]["refused_by_threshold"] == 5
     for question in questions:
         assert question.id in report
