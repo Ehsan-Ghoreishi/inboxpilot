@@ -111,3 +111,16 @@ def test_get_settings_is_cached(monkeypatch):
     second = get_settings()
 
     assert first is second
+
+
+def test_rag_min_score_defaults_to_zero(monkeypatch):
+    _set_required_env(monkeypatch)
+
+    assert get_settings().rag_min_score == 0.0
+
+
+def test_rag_min_score_is_overridable(monkeypatch):
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.3")
+
+    assert get_settings().rag_min_score == 0.3

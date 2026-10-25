@@ -4,6 +4,8 @@ An event-driven assistant that triages job-search email: it classifies
 each incoming message, extracts the facts that matter (company, role,
 deadline, urgency), and proposes a next step — a draft reply, a calendar
 event, or archiving — that only happens after a human approves it.
+Stored emails are embedded with pgvector, so the mailbox can be searched
+by meaning ("which companies asked for a take-home?"), not just keywords.
 
 ## Problem
 
@@ -22,7 +24,7 @@ model reads and suggests; it never acts.
 flowchart LR
     N[Nylas webhook] -->|"HMAC-SHA256 signed"| W["POST /events<br/>verify signature"]
     W --> R[(raw_events)]
-    R -.->|"not wired yet"| M["mapper → canonical Email"]
+    R -->|"background task"| M["mapper → canonical Email"]
     M --> F{processing-mode<br/>filter}
     F --> A["analyzer (OpenAI)<br/>structured output, no tools"]
     A --> C[(classifications)]
@@ -31,22 +33,26 @@ flowchart LR
     P --> UI["GET / dashboard<br/>/actions API (X-API-Key)"]
     UI -->|"human approves"| X["approve() → Nylas<br/>draft / event / archive"]
     X --> L[(audit_log)]
+    A -->|"after triage commits"| E["embed (OpenAI)"]
+    E --> V[(email_embeddings<br/>pgvector HNSW)]
+    Q["POST /search (X-API-Key)"] --> V
 ```
 
 | Layer | Path | Responsibility |
 |---|---|---|
-| API | `app/api/` | Webhook (`/events`), approval API (`/actions`), dashboard (`/`) |
+| API | `app/api/` | Webhook (`/events`), approval API (`/actions`), semantic search (`/search`), dashboard (`/`) |
 | Integrations | `app/integrations/nylas/` | Signature check, SDK client, payload → `Email` mapper, actions |
 | Schemas | `app/schemas/` | Canonical `Email` / `EmailAnalysis`, API responses |
 | Agents | `app/agents/` | LLM classification/extraction; versioned prompts |
 | Workflows | `app/workflows/` | `process_email()`: filter → classify → route → propose |
-| Services | `app/services/` | Pending-action state machine; the only code that calls Nylas actions |
+| Services | `app/services/` | Pending-action state machine (the only code that calls Nylas actions); embedding and search |
 | Database | `app/database/`, `alembic/` | SQLAlchemy models, repository functions, migrations |
 
-**Current state:** the webhook verifies and stores raw events; the
-pipeline from canonical `Email` to pending action, and the approval
-API, are implemented and tested — but the webhook does not yet call the
-mapper and `process_email()` (the dashed edge above).
+**Current state:** the webhook verifies and stores each raw event,
+returns 200, and then runs triage (mapper → filter → classify → route →
+propose) as a background task. Once triage commits, the email is
+embedded in a separate transaction, so an embedding failure never
+affects triage; `scripts/embed_emails.py` backfills anything missed.
 
 ## Quickstart
 
@@ -97,6 +103,36 @@ Nylas, and it refuses anything not `pending` (a repeat approve returns
 failed executions. Even then the blast radius is bounded: a draft is
 created but never sent, and archive is a folder move, not a delete. The
 `/actions` endpoints require `X-API-Key`, compared in constant time.
+
+### Semantic search
+
+`POST /search` (requires `X-API-Key`) embeds the query with the same
+model used for emails and runs a pgvector cosine search (`<=>`) over
+`email_embeddings`:
+
+```sh
+curl -X POST localhost:8000/search -H "X-API-Key: $APP_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"query": "interview next week", "top_k": 5, "category": "interview_invite"}'
+```
+
+It returns `[{email_id, score, subject, sender, received_at, snippet}]`,
+best first, where `score` is cosine similarity (`1 - distance`).
+
+- **Filters run in SQL**, in the same query as the vector search:
+  `category` (the email's *latest* classification), `sender`
+  (case-insensitive substring of address or name), and inclusive
+  `date_from`/`date_to`. The query enables pgvector's
+  `hnsw.iterative_scan`, so a selective filter still returns up to
+  `top_k` matches instead of whatever survived the first index pass.
+- **Only same-model vectors are compared.** Embeddings are stored per
+  (email, model); a search only considers rows from the configured
+  `EMBEDDING_MODEL`, so switching models never mixes incomparable
+  vectors.
+- **Idempotent embedding.** Each embedding stores a hash of its input
+  text; an unchanged email is never re-sent to OpenAI.
+- **`RAG_MIN_SCORE`** (default `0.0`) drops weak matches. It will also
+  gate which emails a future `/ask` endpoint may use as context.
 
 ### Canonical schema
 
@@ -151,7 +187,6 @@ pending action of the routed type, and no Nylas call or approval.
   that tunnel exposes the *whole* app, including the dashboard at `/`,
   which has no authentication. Don't leave one running, and don't
   deploy this as-is.
-- **The webhook doesn't trigger the pipeline yet** (see *Current state*).
 - **Known open issues** from a security review, not yet fixed:
   concurrent approvals of the same action can both execute (no row
   lock); empty `WEBHOOK_SECRET`/`APP_API_KEY` values are accepted at

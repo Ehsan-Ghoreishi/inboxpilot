@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     # OpenAI embedding model for email embeddings. Must produce vectors
     # of `app.database.models.EMBEDDING_DIM` (1536) dimensions.
     embedding_model: str = "text-embedding-3-small"
+    # Minimum cosine similarity (1 - distance) for a retrieved email to be
+    # returned by /search (and, later, used as context by /ask). Range
+    # [-1, 1]; the default only drops anti-correlated matches.
+    rag_min_score: float = 0.0
 
 
 @lru_cache

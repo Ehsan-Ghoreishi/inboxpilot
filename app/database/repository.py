@@ -8,7 +8,7 @@ session bound to a test database/transaction directly.
 
 from datetime import datetime
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -269,3 +269,62 @@ def list_email_ids_without_embedding(session: Session, model: str) -> list[int]:
             select(EmailRecord.id).where(~has_embedding).order_by(EmailRecord.id)
         )
     )
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def search_email_embeddings(
+    session: Session,
+    *,
+    query_embedding: list[float],
+    model: str,
+    top_k: int,
+    min_score: float,
+    category: str | None = None,
+    sender: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> list[tuple[EmailRecord, float]]:
+    """Nearest emails to `query_embedding` by cosine distance (`<=>`),
+    restricted to embeddings of `model` and the given filters.
+
+    Returns `(email, score)` pairs, best first, where score is
+    `1 - distance` and at least `min_score`. `category` matches the
+    email's latest classification.
+    """
+    distance = EmailEmbedding.embedding.cosine_distance(query_embedding)
+    score = (1 - distance).label("score")
+    stmt = (
+        select(EmailRecord, score)
+        .join(EmailEmbedding, EmailEmbedding.email_id == EmailRecord.id)
+        .where(EmailEmbedding.model == model, score >= min_score)
+        .order_by(distance, EmailRecord.id)
+        .limit(top_k)
+    )
+    if category is not None:
+        latest_category = (
+            select(Classification.category)
+            .where(Classification.email_id == EmailRecord.id)
+            .order_by(Classification.created_at.desc(), Classification.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        stmt = stmt.where(latest_category == category)
+    if sender is not None:
+        pattern = f"%{_escape_like(sender)}%"
+        stmt = stmt.where(
+            EmailRecord.sender_email.ilike(pattern, escape="\\")
+            | EmailRecord.sender_name.ilike(pattern, escape="\\")
+        )
+    if date_from is not None:
+        stmt = stmt.where(EmailRecord.received_at >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(EmailRecord.received_at <= date_to)
+
+    # With filters, an HNSW scan can otherwise stop after `ef_search`
+    # candidates and return fewer than `top_k` matches; iterative scan
+    # keeps going until enough rows pass the filters.
+    session.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
+    return [(email, row_score) for email, row_score in session.execute(stmt)]
