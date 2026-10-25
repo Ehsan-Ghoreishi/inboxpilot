@@ -81,6 +81,9 @@ def _truncate(test_engine) -> None:
 
 @pytest.fixture
 def client(app_db_env, test_engine, monkeypatch) -> TestClient:
+    # Stub vectors aren't on the real embedder's score scale, so don't
+    # apply its calibrated threshold; tests opt into one explicitly.
+    monkeypatch.setenv("RAG_MIN_SCORE", "0.0")
     monkeypatch.setattr("app.api.search.get_embedder", lambda: StubEmbedder())
     _truncate(test_engine)
     from app.main import app

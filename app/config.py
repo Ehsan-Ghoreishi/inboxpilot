@@ -49,9 +49,12 @@ class Settings(BaseSettings):
     # of `app.database.models.EMBEDDING_DIM` (1536) dimensions.
     embedding_model: str = "text-embedding-3-small"
     # Minimum cosine similarity (1 - distance) for a retrieved email to be
-    # returned by /search or used as context by /ask. Range
-    # [-1, 1]; the default only drops anti-correlated matches.
-    rag_min_score: float = 0.0
+    # returned by /search or used as context by /ask. Range [-1, 1].
+    # Calibrated for text-embedding-3-small on the retrieval eval
+    # (`eval/run_retrieval.py`): it refuses every unanswerable question
+    # and keeps 19/20 answerable ones. Re-run the eval after changing
+    # EMBEDDING_MODEL, since scores aren't comparable across models.
+    rag_min_score: float = 0.45
 
     @field_validator("webhook_secret", "app_api_key")
     @classmethod

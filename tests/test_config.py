@@ -113,10 +113,10 @@ def test_get_settings_is_cached(monkeypatch):
     assert first is second
 
 
-def test_rag_min_score_defaults_to_zero(monkeypatch):
+def test_rag_min_score_defaults_to_calibrated_value(monkeypatch):
     _set_required_env(monkeypatch)
 
-    assert get_settings().rag_min_score == 0.0
+    assert get_settings().rag_min_score == 0.45
 
 
 def test_rag_min_score_is_overridable(monkeypatch):
