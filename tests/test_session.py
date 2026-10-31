@@ -7,7 +7,7 @@ from app.database.session import get_engine
 
 
 @pytest.fixture
-def engine(tmp_path, monkeypatch):
+def env(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     for key, value in {
         "OPENAI_API_KEY": "sk-test",
@@ -22,11 +22,18 @@ def engine(tmp_path, monkeypatch):
         "PROCESSING_MODE": "test",
     }.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.delenv("DB_POOL_SIZE", raising=False)
+    monkeypatch.delenv("DB_MAX_OVERFLOW", raising=False)
     get_settings.cache_clear()
     get_engine.cache_clear()
-    yield get_engine()
+    yield monkeypatch
     get_engine.cache_clear()
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def engine(env):
+    return get_engine()
 
 
 def test_engine_pool_is_bounded_and_resilient(engine):
@@ -36,3 +43,13 @@ def test_engine_pool_is_bounded_and_resilient(engine):
     assert pool._max_overflow == 0
     assert pool._pre_ping is True
     assert pool._recycle == 300
+
+
+def test_engine_pool_uses_db_pool_settings(env):
+    env.setenv("DB_POOL_SIZE", "2")
+    env.setenv("DB_MAX_OVERFLOW", "1")
+
+    pool = get_engine().pool
+
+    assert pool.size() == 2
+    assert pool._max_overflow == 1

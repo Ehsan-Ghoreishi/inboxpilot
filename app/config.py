@@ -7,7 +7,7 @@ variables / secrets. Everything else should depend on `get_settings()`.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     # Cloud Run that throttle CPU once the response has been sent, which
     # would otherwise starve background work.
     process_events_inline: bool = False
+    # SQLAlchemy pool per process: at most pool_size + max_overflow
+    # connections. Every Cloud Run instance and the reprocess job holds
+    # its own pool, and Supabase's session pooler allows only 15 client
+    # connections in total, so keep (instances + jobs) x (size + overflow)
+    # well below that.
+    db_pool_size: int = Field(default=5, ge=1)
+    db_max_overflow: int = Field(default=0, ge=0)
 
     @field_validator("webhook_secret", "app_api_key")
     @classmethod

@@ -150,9 +150,11 @@ Settings that matter when deployed:
 
 Probes: `/health` is liveness and never touches the database; `/ready`
 runs `SELECT 1` and returns 503 when the database is unreachable. Each
-instance holds at most 5 database connections (`pool_size=5`,
-`max_overflow=0`), so size the database's connection limit for
-instances x 5 plus the job.
+process holds at most `DB_POOL_SIZE + DB_MAX_OVERFLOW` database
+connections (default 5 + 0). Each Cloud Run instance and each run of the
+reprocess job has its own pool, so keep (max instances + jobs) x that
+well below the database's limit; Supabase's session pooler allows 15
+client connections in total.
 
 Logs go to stdout as one JSON object per line (`severity`, `message`,
 and `event_id`/`outcome` where relevant), never with email content,

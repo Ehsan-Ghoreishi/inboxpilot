@@ -32,8 +32,8 @@ router = APIRouter()
 INLINE_PROCESSING_TIMEOUT_SECONDS = 8.0
 
 # Bounded so timed-out triage threads (which can't be killed) can't pile
-# up without limit; kept below the DB pool size (5). Work queued past
-# its deadline is skipped by `run_triage_safely`.
+# up without limit; kept below the default DB_POOL_SIZE (5). Work queued
+# past its deadline is skipped by `run_triage_safely`.
 _INLINE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="inline-triage")
 
 
