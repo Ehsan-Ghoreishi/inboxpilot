@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        # Same credentials as docker-compose.yml; the integration tests
+        # create and migrate their own `inboxpilot_test` database here.
+        env:
+          POSTGRES_USER: inboxpilot
+          POSTGRES_PASSWORD: inboxpilot
+          POSTGRES_DB: inboxpilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U inboxpilot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Dummy values only — no real secrets. Tests mock OpenAI/Nylas, and
+    # tests/conftest.py fails any test that makes a real OpenAI request.
+    env:
+      DATABASE_URL: postgresql+psycopg://inboxpilot:inboxpilot@localhost:5432/inboxpilot
+      OPENAI_API_KEY: sk-test-dummy
+      OPENAI_MODEL: gpt-test
+      NYLAS_API_KEY: nylas-test
+      NYLAS_CLIENT_ID: client-test
+      NYLAS_GRANT_ID: grant-test
+      WEBHOOK_SECRET: ci-webhook-secret
+      SERVER_URL: http://localhost:8000
+      APP_API_KEY: ci-app-key
+      PROCESSING_MODE: test
+      DRY_RUN: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Migrate database
+        run: uv run alembic upgrade head
+
+      # eval/ is not run here: it calls the real OpenAI API (needs a key,
+      # costs money). Its pure-Python metrics are covered by tests/.
+      - name: Run tests
+        run: uv run pytest -q

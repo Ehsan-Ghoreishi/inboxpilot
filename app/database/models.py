@@ -20,6 +20,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -152,9 +153,24 @@ class PendingAction(Base):
     """A proposed action awaiting (or past) human approval."""
 
     __tablename__ = "pending_actions"
+    __table_args__ = (
+        # At most one *pending* action per (thread, action type), so a
+        # thread's follow-up emails don't pile up duplicate proposals.
+        # Decided actions (executed/rejected/failed) are not constrained.
+        Index(
+            "uq_pending_actions_thread_id_action_type_pending",
+            "thread_id",
+            "action_type",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email_id: Mapped[int] = mapped_column(ForeignKey("emails.id"), index=True)
+    # Copied from the email: the unique index above can't reach across
+    # to `emails.thread_id`.
+    thread_id: Mapped[str]
     # native_enum=False: stored as VARCHAR + CHECK, not a Postgres native
     # ENUM type, so adding a new status/action later doesn't need an
     # `ALTER TYPE ... ADD VALUE` migration. values_callable is required:

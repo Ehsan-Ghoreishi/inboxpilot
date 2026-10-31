@@ -6,7 +6,7 @@ module only talks to OpenAI.
 
 The email's own content (subject/body/sender) is treated as untrusted
 data: it is wrapped in a clearly delimited block and the system prompt
-(`prompts/analyze_v1.md`) explicitly instructs the model never to follow
+(`prompts/analyze_v2.md`) explicitly instructs the model never to follow
 instructions found inside it.
 """
 
@@ -25,7 +25,7 @@ from app.config import get_settings
 from app.schemas.email import Email, EmailAnalysis
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-PROMPT_VERSION = "analyze_v1"
+PROMPT_VERSION = "analyze_v2"
 PROMPT_PATH = PROMPTS_DIR / f"{PROMPT_VERSION}.md"
 
 

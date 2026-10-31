@@ -5,6 +5,7 @@ variables / secrets. Everything else should depend on `get_settings()`.
 """
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,6 +59,14 @@ class Settings(BaseSettings):
     # Re-run the evals after changing EMBEDDING_MODEL, since scores
     # aren't comparable across models.
     rag_min_score: float = 0.30
+    # `production` turns off the interactive API docs (/docs, /redoc,
+    # /openapi.json). Anything other than these two values is rejected.
+    environment: Literal["local", "production"] = "local"
+    # When true, POST /events runs triage inside the request (bounded by
+    # a timeout) instead of as a BackgroundTask. Needed on hosts like
+    # Cloud Run that throttle CPU once the response has been sent, which
+    # would otherwise starve background work.
+    process_events_inline: bool = False
 
     @field_validator("webhook_secret", "app_api_key")
     @classmethod

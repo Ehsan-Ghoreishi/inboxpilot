@@ -15,7 +15,7 @@ but never sent.
 """
 
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -29,8 +29,9 @@ from app.database.models import (
     PendingActionStatus,
 )
 from app.database.repository import (
-    create_pending_action as _db_create_pending_action,
     get_or_create_email,
+    get_pending_action_for_thread,
+    insert_pending_action_if_absent,
     update_pending_action_status,
     write_audit_log,
 )
@@ -41,6 +42,7 @@ from app.integrations.nylas.actions import (
     create_draft,
 )
 from app.schemas.email import Email, EmailAnalysis
+from app.services.event_time import EventTiming, resolve_timing
 
 logger = logging.getLogger(__name__)
 
@@ -70,29 +72,70 @@ def _build_payload(
         }
 
     if action_type is ActionType.CREATE_EVENT:
-        # Only a date (no time) is extracted today, so this is always
-        # an all-day placeholder event — refining it to a specific time
-        # slot is future work, not this step's job. If no deadline was
-        # extracted at all, fall back to one week out rather than
-        # baking an invalid `when` into the payload (which would only
-        # fail later, at approval time, far from the actual cause).
-        if analysis.deadline is not None:
-            event_date = analysis.deadline
-            description = analysis.reasoning
-        else:
-            event_date = email.received_at.date() + timedelta(days=7)
-            description = (
-                f"{analysis.reasoning}\n\n"
-                "No specific date was extracted from the email — this "
-                "placeholder date needs confirming before relying on it."
-            )
-        return {
-            "title": f"Interview: {analysis.company or email.sender.email}",
-            "description": description,
-            "when": {"date": event_date.isoformat(), "object": "date"},
-        }
+        return _event_payload(email, analysis)
 
     raise ValueError(f"Unhandled action type: {action_type}")  # pragma: no cover
+
+
+def _event_when(timing: EventTiming, fallback_date: date) -> dict[str, Any]:
+    """A Nylas `when`: timed only for a verified start; otherwise all-day."""
+    if timing.start is None:
+        day = timing.local_date or fallback_date
+        return {"date": day.isoformat(), "object": "date"}
+    start = int(timing.start.timestamp())
+    zone = {"timezone": timing.timezone_name} if timing.timezone_name else {}
+    if timing.duration_minutes is None:
+        # No stated length: a point in time, rather than an invented one.
+        return {"object": "time", "time": start, **zone}
+    end = start + timing.duration_minutes * 60
+    span_zones = (
+        {"start_timezone": timing.timezone_name, "end_timezone": timing.timezone_name}
+        if timing.timezone_name
+        else {}
+    )
+    return {"object": "timespan", "start_time": start, "end_time": end, **span_zones}
+
+
+def _event_description(
+    email: Email, timing: EventTiming, placeholder_date: bool
+) -> str:
+    """Built only from facts of the email itself — never from the model's
+    free-text `reasoning`, which an email can steer."""
+    sender = email.sender.email
+    if email.sender.name:
+        sender = f"{' '.join(email.sender.name.split())} <{sender}>"
+    lines = [f"Email: {' '.join(email.subject.split())}", f"From: {sender}"]
+    if timing.start is not None:
+        lines.append(f"Start: {timing.start.isoformat()}")
+    if timing.needs_clarification:
+        lines.append(
+            "The email doesn't give a complete time and timezone: confirm "
+            "the time with the sender before relying on this event."
+        )
+    if placeholder_date:
+        lines.append(
+            "No date was found in the email: this placeholder date needs "
+            "confirming before relying on it."
+        )
+    return "\n".join(lines)
+
+
+def _event_payload(email: Email, analysis: EmailAnalysis) -> dict[str, Any]:
+    # Without any date in the email, fall back to one week out rather
+    # than baking an invalid `when` into the payload (which would only
+    # fail later, at approval time, far from the actual cause).
+    timing = resolve_timing(analysis)
+    fallback_date = email.received_at.date() + timedelta(days=7)
+    title = f"Interview: {analysis.company or email.sender.email}"
+    if timing.needs_clarification:
+        title = f"[Time TBC] {title}"
+    return {
+        "title": title,
+        "description": _event_description(
+            email, timing, placeholder_date=timing.local_date is None
+        ),
+        "when": _event_when(timing, fallback_date),
+    }
 
 
 def create_pending_action(
@@ -118,18 +161,33 @@ def propose_action(
     action_type: ActionType,
 ) -> PendingAction:
     """`create_pending_action()` within the caller's transaction, for an
-    already-persisted email."""
+    already-persisted email.
+
+    Idempotent per (thread, action type): if the thread already has a
+    pending action of this type, that one is returned and nothing new is
+    written. Once it's decided (executed/rejected/failed), a new one can
+    be proposed.
+    """
     payload = _build_payload(email, analysis, action_type)
-    pending_action = _db_create_pending_action(
-        session, email_record_id, action_type, payload
-    )
-    write_audit_log(
-        session,
-        actor="system",
-        action="created",
-        pending_action_id=pending_action.id,
-    )
-    return pending_action
+    while True:
+        pending_action = insert_pending_action_if_absent(
+            session, email_record_id, email.thread_id, action_type, payload
+        )
+        if pending_action is not None:
+            write_audit_log(
+                session,
+                actor="system",
+                action="created",
+                pending_action_id=pending_action.id,
+            )
+            return pending_action
+        existing = get_pending_action_for_thread(
+            session, email.thread_id, action_type
+        )
+        if existing is not None:
+            return existing
+        # The conflicting action was decided between the two statements;
+        # the slot is free again, so try the insert once more.
 
 
 def _execute(pending_action: PendingAction, email_record: EmailRecord) -> str:

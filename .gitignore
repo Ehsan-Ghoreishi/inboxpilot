@@ -1,4 +1,5 @@
-.env
+.env*
+!.env.example
 requests/
 __pycache__/
 .venv/

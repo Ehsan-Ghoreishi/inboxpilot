@@ -1,5 +1,7 @@
 # InboxPilot
 
+[![CI](https://github.com/Ehsan-Ghoreishi/inboxpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Ehsan-Ghoreishi/inboxpilot/actions/workflows/ci.yml)
+
 An event-driven assistant that triages job-search email: it classifies
 each incoming message, extracts the facts that matter (company, role,
 deadline, urgency), and proposes a next step — a draft reply, a calendar
@@ -70,7 +72,34 @@ uv run uvicorn app.main:app --reload  # API on http://localhost:8000
 ```
 
 Tests: `uv run pytest` (integration tests in `tests/integration/` use
-the Compose database and are skipped if Docker isn't available).
+the Postgres at `DATABASE_URL`, starting the Compose `db` service if it
+isn't reachable, and are skipped if neither works — except under `CI`,
+where they fail instead). Tests never call OpenAI: any real request
+fails the test (`tests/conftest.py`).
+
+### CI
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to
+`main`: `uv sync --frozen`, `uv run alembic upgrade head`, then
+`uv run pytest -q`, against a `pgvector/pgvector:pg16` service with
+dummy credentials. `eval/` is not run in CI (it calls the real OpenAI
+API). To run the same steps locally with CI's environment (variables
+set here override `.env`; optional ones not set here, like
+`RAG_MIN_SCORE`, still come from `.env` if present):
+
+```sh
+docker compose up -d db
+env -i HOME="$HOME" PATH="$PATH" CI=true \
+  DATABASE_URL=postgresql+psycopg://inboxpilot:inboxpilot@localhost:5432/inboxpilot \
+  OPENAI_API_KEY=sk-test-dummy OPENAI_MODEL=gpt-test \
+  NYLAS_API_KEY=nylas-test NYLAS_CLIENT_ID=client-test NYLAS_GRANT_ID=grant-test \
+  WEBHOOK_SECRET=ci-webhook-secret SERVER_URL=http://localhost:8000 \
+  APP_API_KEY=ci-app-key PROCESSING_MODE=test DRY_RUN=false \
+  sh -c 'uv sync --frozen && uv run alembic upgrade head && uv run pytest -q'
+```
+
+Or run the workflow itself in Docker with [act](https://github.com/nektos/act):
+`act pull_request` (stop the Compose `db` first — both bind port 5432).
 
 ## Offline development
 
@@ -93,6 +122,46 @@ events with `scripts/send_fake_event.py`.
 
 `DRY_RUN` defaults to `false`; apply migrations
 (`uv run alembic upgrade head`) to add the `audit_log.dry_run` column.
+
+## Container image and Cloud Run
+
+The `Dockerfile` builds a runtime-only image (Python 3.11 to match
+`requires-python`, `uv sync --frozen --no-dev`, only `app/`, `alembic/`,
+`alembic.ini` and `scripts/`), runs as a non-root user and serves on
+`$PORT` (default 8080). `.dockerignore` keeps `.env*`, `.git`, tests,
+`eval/results` and `requests/` out of the build context. The image sets
+`STORE_RAW_EVENT_FILES=false`: its filesystem is ephemeral and not
+writable by the app user, and the database holds every raw event.
+
+Settings that matter when deployed:
+
+- `ENVIRONMENT=production` disables `/docs`, `/redoc` and
+  `/openapi.json`. Startup logs `ENVIRONMENT`, `PROCESSING_MODE`,
+  `DRY_RUN` and `PROCESS_EVENTS_INLINE` (never secret values).
+- `PROCESS_EVENTS_INLINE=true` triages each webhook event inside the
+  request, within an 8 second budget, instead of as a background task:
+  Cloud Run throttles CPU once a response is sent, which would stall
+  background work. On timeout or error the response is still 200 and
+  the raw event stays unprocessed.
+- `python -m scripts.reprocess_raw_events [--limit N]` (default 50)
+  triages stored events that have no email yet. It is idempotent, prints
+  counts, and exits non-zero if any event failed, so it can run as a
+  scheduled job to retry what inline processing left behind.
+
+Probes: `/health` is liveness and never touches the database; `/ready`
+runs `SELECT 1` and returns 503 when the database is unreachable. Each
+instance holds at most 5 database connections (`pool_size=5`,
+`max_overflow=0`), so size the database's connection limit for
+instances x 5 plus the job.
+
+Logs go to stdout as one JSON object per line (`severity`, `message`,
+and `event_id`/`outcome` where relevant), never with email content,
+tracebacks or secrets.
+
+To send a signed synthetic event to a deployment, use the deployment's
+secret:
+`WEBHOOK_SECRET=... uv run python scripts/send_fake_event.py --url https://<service-url>`
+(`/events` is appended to a bare base URL).
 
 ## Design decisions
 
@@ -140,13 +209,29 @@ that no single one has to hold:
    the attacker asked for.
 4. **Fixed action shapes.** A draft reply only ever addresses the
    original sender (no cc/bcc); there is no send, forward, or delete
-   action to be tricked into.
+   action to be tricked into. A calendar event's description is built
+   from the email's own subject and sender, never from the model's
+   free-text `reasoning`.
 5. **Human approval** (above) for whatever gets through.
 
 `tests/test_injection.py` runs five malicious emails through the
 pipeline with a *fully fooled* model and asserts these properties hold:
 no tools offered, content stays inside one untrusted block, at most one
 pending action of the routed type, and no Nylas call or approval.
+
+### Meeting times
+
+The analyzer extracts a meeting's `start_time` (ISO 8601 with offset),
+the IANA `timezone` the email states, an optional `duration_minutes`,
+and `needs_clarification` when a time of day or timezone is missing.
+`app/services/event_time.py` then re-checks the model's offset against
+that zone's rules on that date (`Europe/Berlin` is +01:00 in winter,
++02:00 in summer, even if the email says "CET"). A timed event is
+proposed only if everything checks out. Otherwise (missing time or zone,
+unknown zone, wrong offset, a local time skipped by a DST change) the
+proposal is an all-day event titled "[Time TBC] …", never a guessed
+time. Without a stated duration the event is a single point in time
+rather than an invented length.
 
 ## Retrieval-augmented question answering
 
@@ -404,35 +489,61 @@ flag does the rest; the ask eval above measures that combination.
 - **Known open issues** from a security review, not yet fixed:
   any `PROCESSING_MODE` other than `test` processes all mail;
   the webhook stores raw payloads after checking only the signature
-  and `id`, not the full `WebhookEvent` schema; the `Dockerfile`
-  doesn't start the API server and has no `.dockerignore`; archive's
-  folder semantics are unverified for Gmail.
+  and `id`, not the full `WebhookEvent` schema; archive's folder
+  semantics are unverified for Gmail.
 - Email bodies are passed to the model as HTML, unconverted.
 - Retrieval and question-answering limitations are listed under
   [RAG limitations](#rag-limitations).
 
 ## Evaluation
 
-### Classification
+### Classification and time extraction
 
-`eval/dataset.jsonl` holds 50 synthetic, labeled emails — 10 per
-category, including 10 German, 10 deliberately ambiguous, and 5
-adversarial (prompt-injection) examples; all addresses use the reserved
-`.example` domain. Run it with:
+`eval/dataset.jsonl` holds 60 synthetic, labeled emails, all with
+addresses on the reserved `.example` domain:
+
+- 50 for classification: 10 per category, including 10 German, 10
+  deliberately ambiguous, and 5 adversarial (prompt-injection) examples.
+- 10 interview emails (4 German) labeled with the expected start time
+  (ISO 8601 with offset), duration, or that the time needs
+  clarification: missing timezone, missing time of day, "send us your
+  availability", and times on both sides of the 2026-03-29 CET → CEST
+  switch and the 2026-03-08 US DST switch.
+
+Run it with:
 
 ```sh
-uv run python -m eval.run --prompt-version analyze_v1 \
+uv run python -m eval.run --prompt-version analyze_v2 \
   --input-usd-per-mtok <price> --output-usd-per-mtok <price>
 ```
 
-It reports accuracy, per-class precision/recall/F1, a confusion matrix,
-a calibration table (confidence bins vs. actual accuracy), per-slice
+It reports classification accuracy (all 60 items) and time-extraction
+accuracy (the 10 time-labeled items) separately, then per-class
+precision/recall/F1, a confusion matrix, a calibration table, per-slice
 accuracy, mean tokens, estimated cost, and latency per email, and writes
-the full run to `eval/results/<timestamp>.json`.
+the full run to `eval/results/<timestamp>.json`. Time extraction is
+scored on what would actually be scheduled, after the deterministic
+timezone check in `app/services/event_time.py`: the start must match in
+both instant and UTC offset, and a clarification item passes only if no
+timed event would be created.
 
-**Results:** no eval run has been recorded yet. Numbers will be added
-here copied verbatim from an `eval/results/*.json` file, together with
-the model and prompt version that produced them.
+**Results** (`eval/results/20261025T193701Z.json`, `gpt-4o`,
+`analyze_v2`):
+
+| Metric | Result |
+|---|---|
+| Classification accuracy | 0.983 (59/60) |
+| Time-extraction accuracy | 0.900 (9/10) |
+| Duration accuracy | 0.857 (6/7) |
+
+- The one misclassification, `oth-09-amb` (a friend offering a
+  referral), flips between `other` and `recruiter_outreach` from run to
+  run under both `analyze_v1` and `analyze_v2` (2 of 3 repeats each).
+- The one time miss, `time-05` ("Thursday, March 12 at 2pm ET"): the
+  model gave `-05:00` (EST), but US daylight saving had started on
+  March 8 (`-04:00`). The offset check rejected it, so the action
+  became an all-day "[Time TBC]" event rather than a timed event an
+  hour off. Its duration counts as a miss for the same reason.
 
 ### Retrieval and question answering
 

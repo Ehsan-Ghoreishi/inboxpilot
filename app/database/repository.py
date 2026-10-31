@@ -8,7 +8,7 @@ session bound to a test database/transaction directly.
 
 from datetime import datetime
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -118,21 +118,51 @@ def save_classification(
     return classification
 
 
-def create_pending_action(
+def insert_pending_action_if_absent(
     session: Session,
     email_record_id: int,
+    thread_id: str,
     action_type: ActionType,
     payload: dict,
-) -> PendingAction:
-    pending_action = PendingAction(
-        email_id=email_record_id,
-        action_type=action_type,
-        payload=payload,
-        status=PendingActionStatus.PENDING,
+) -> PendingAction | None:
+    """Insert a pending action, or return `None` if `thread_id` already has
+    a pending one of this `action_type`.
+
+    Relies on the partial unique index over pending rows: a concurrent
+    insert for the same thread blocks until the other transaction
+    finishes, then is skipped if that one committed.
+    """
+    stmt = (
+        pg_insert(PendingAction)
+        .values(
+            email_id=email_record_id,
+            thread_id=thread_id,
+            action_type=action_type,
+            payload=payload,
+            status=PendingActionStatus.PENDING,
+        )
+        .on_conflict_do_nothing(
+            index_elements=["thread_id", "action_type"],
+            index_where=text("status = 'pending'"),
+        )
+        .returning(PendingAction.id)
     )
-    session.add(pending_action)
-    session.flush()
-    return pending_action
+    pending_action_id = session.execute(stmt).scalar_one_or_none()
+    if pending_action_id is None:
+        return None
+    return session.get_one(PendingAction, pending_action_id)
+
+
+def get_pending_action_for_thread(
+    session: Session, thread_id: str, action_type: ActionType
+) -> PendingAction | None:
+    return session.scalars(
+        select(PendingAction).where(
+            PendingAction.thread_id == thread_id,
+            PendingAction.action_type == action_type,
+            PendingAction.status == PendingActionStatus.PENDING,
+        )
+    ).one_or_none()
 
 
 def update_pending_action_status(
@@ -194,18 +224,25 @@ def list_recent_emails(session: Session, limit: int = 50) -> list[EmailRecord]:
     )
 
 
-def list_unprocessed_raw_events(session: Session) -> list[RawEvent]:
-    """Raw events whose message (`payload.data.object.id`) has no `emails` row.
+def list_unprocessed_raw_events(
+    session: Session, limit: int | None = None
+) -> list[RawEvent]:
+    """`message.*` raw events whose message (`payload.data.object.id`) has
+    no `emails` row, oldest first, at most `limit` of them.
 
-    Events without a message id (e.g. non-message triggers) are included
-    too; it's up to the caller to skip what it can't process.
+    Other event types are never turned into emails, so they're left out:
+    otherwise they would stay "unprocessed" forever and, with a `limit`,
+    could fill every batch and starve the events that can be processed.
     """
     message_id = RawEvent.payload["data"]["object"]["id"].as_string()
+    event_type = RawEvent.payload["type"].as_string()
     return list(
         session.scalars(
             select(RawEvent)
+            .where(event_type.like("message.%"))
             .where(~exists().where(EmailRecord.nylas_message_id == message_id))
             .order_by(RawEvent.id)
+            .limit(limit)
         )
     )
 

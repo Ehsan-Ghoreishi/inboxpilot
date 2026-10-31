@@ -135,3 +135,36 @@ def test_blank_secret_is_rejected(monkeypatch, name, blank):
         get_settings()
 
     assert name in str(exc_info.value)
+
+
+def test_environment_defaults_to_local(monkeypatch):
+    _set_required_env(monkeypatch, ENVIRONMENT=None)
+
+    assert get_settings().environment == "local"
+
+
+def test_environment_accepts_production(monkeypatch):
+    _set_required_env(monkeypatch, ENVIRONMENT="production")
+
+    assert get_settings().environment == "production"
+
+
+def test_unknown_environment_is_rejected(monkeypatch):
+    _set_required_env(monkeypatch, ENVIRONMENT="staging")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        get_settings()
+
+    assert "ENVIRONMENT" in str(exc_info.value)
+
+
+def test_process_events_inline_defaults_to_false(monkeypatch):
+    _set_required_env(monkeypatch, PROCESS_EVENTS_INLINE=None)
+
+    assert get_settings().process_events_inline is False
+
+
+def test_process_events_inline_is_overridable(monkeypatch):
+    _set_required_env(monkeypatch, PROCESS_EVENTS_INLINE="true")
+
+    assert get_settings().process_events_inline is True

@@ -9,7 +9,14 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StringConstraints,
+)
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1, strip_whitespace=True)]
 
@@ -67,6 +74,18 @@ class EmailAnalysis(BaseModel):
     company: NonEmptyStr | None = None
     role: NonEmptyStr | None = None
     deadline: date | None = None
+    # A meeting/interview start, as stated in the email: the local time
+    # written there, with that zone's UTC offset on that date.
+    # `app.services.event_time` re-checks the offset against `timezone`
+    # before anything is scheduled at this time.
+    start_time: AwareDatetime | None = None
+    # IANA zone name (e.g. "Europe/Berlin") or a fixed offset ("+02:00")
+    # the email itself states; `None` if the email gives no timezone.
+    timezone: NonEmptyStr | None = None
+    duration_minutes: int | None = Field(default=None, ge=1, le=1440)
+    # A meeting is mentioned but its time or timezone is missing or
+    # unclear, so no timed event should be created from it.
+    needs_clarification: bool = False
     urgency: Urgency
     suggested_action: SuggestedAction
     reasoning: Annotated[

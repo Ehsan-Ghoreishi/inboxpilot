@@ -55,7 +55,11 @@ def _approve_or_502(pending_action_id: int) -> PendingAction:
     except Exception:
         # The service has already marked the action `failed` and audited
         # it; don't leak provider error details to the client.
-        logger.exception("Executing pending action %s failed", pending_action_id)
+        logger.exception(
+            "Executing pending action %s failed",
+            pending_action_id,
+            extra={"pending_action_id": pending_action_id, "outcome": "failed"},
+        )
         raise HTTPException(
             http_status.HTTP_502_BAD_GATEWAY,
             "Executing the action failed; it has been marked 'failed'",

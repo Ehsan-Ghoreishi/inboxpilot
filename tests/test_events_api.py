@@ -1,5 +1,7 @@
 import json
 import logging
+import threading
+import time
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -7,8 +9,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.events import INLINE_PROCESSING_TIMEOUT_SECONDS
 from app.config import get_settings
 from app.integrations.nylas.webhooks import compute_signature
+from app.workflows.triage_workflow import TriageOutcome
 
 REQUIRED_ENV = {
     "OPENAI_API_KEY": "sk-test",
@@ -39,7 +43,8 @@ def _isolated_env(tmp_path, monkeypatch):
 def _enable_triage_logger(monkeypatch):
     """Alembic's `fileConfig` (run by the integration suite in the same
     process) disables already-created loggers; re-enable ours for caplog."""
-    monkeypatch.setattr(logging.getLogger("app.workflows.background"), "disabled", False)
+    for name in ("app.workflows.background", "app.api.events"):
+        monkeypatch.setattr(logging.getLogger(name), "disabled", False)
 
 
 @pytest.fixture
@@ -284,3 +289,141 @@ def test_post_events_agent_exception_does_not_break_the_request(
     assert "evt-full-1" in caplog.text
     assert "RuntimeError" in caplog.text
     assert SYNTHETIC_SUBJECT not in caplog.text
+
+
+# --- POST /events with PROCESS_EVENTS_INLINE -----------------------------------
+
+
+@pytest.fixture
+def inline(monkeypatch):
+    monkeypatch.setenv("PROCESS_EVENTS_INLINE", "true")
+    get_settings.cache_clear()
+
+
+def test_inline_mode_triages_within_the_request_with_a_deadline(
+    client, inline, mock_triage, mock_db_persistence
+):
+    mock_triage.return_value = TriageOutcome.ACTION_PROPOSED
+    body = json.dumps(SAMPLE_EVENT).encode("utf-8")
+    before = time.monotonic()
+
+    response = _signed_post(client, body)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    mock_db_persistence.assert_called_once_with("evt-123", SAMPLE_EVENT)
+    mock_triage.assert_called_once()
+    event_id, event, deadline = mock_triage.call_args.args
+    assert (event_id, event) == ("evt-123", SAMPLE_EVENT)
+    assert before < deadline <= time.monotonic() + INLINE_PROCESSING_TIMEOUT_SECONDS
+
+
+def test_inline_mode_does_not_schedule_a_background_task(
+    client, inline, mock_triage, monkeypatch
+):
+    add_task = MagicMock()
+    monkeypatch.setattr("fastapi.BackgroundTasks.add_task", add_task)
+    mock_triage.return_value = TriageOutcome.NO_ACTION
+
+    _signed_post(client, json.dumps(SAMPLE_EVENT).encode("utf-8"))
+
+    add_task.assert_not_called()
+    mock_triage.assert_called_once()
+
+
+def test_background_mode_is_the_default(client, mock_triage, monkeypatch):
+    add_task = MagicMock()
+    monkeypatch.setattr("fastapi.BackgroundTasks.add_task", add_task)
+
+    _signed_post(client, json.dumps(SAMPLE_EVENT).encode("utf-8"))
+
+    add_task.assert_called_once_with(mock_triage, "evt-123", SAMPLE_EVENT)
+
+
+def test_inline_timeout_still_returns_200_and_logs_timeout(
+    client, inline, monkeypatch, caplog, mock_db_persistence
+):
+    monkeypatch.setattr("app.api.events.INLINE_PROCESSING_TIMEOUT_SECONDS", 0.05)
+    finished = threading.Event()
+
+    def slow_triage(event_id, event, deadline):
+        finished.wait(timeout=2)
+        return TriageOutcome.ACTION_PROPOSED
+
+    monkeypatch.setattr("app.api.events.run_triage_safely", slow_triage)
+    body = json.dumps(SAMPLE_EVENT).encode("utf-8")
+
+    started = time.monotonic()
+    with caplog.at_level(logging.INFO, logger="app.api.events"):
+        response = _signed_post(client, body)
+    elapsed = time.monotonic() - started
+    finished.set()
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert elapsed < 1.5
+    mock_db_persistence.assert_called_once()
+    accepted = [r for r in caplog.records if r.getMessage().startswith("Webhook event")]
+    assert [(r.event_id, r.outcome) for r in accepted] == [("evt-123", "timeout")]
+
+
+def test_inline_triage_error_still_returns_200_and_logs_error(
+    client, inline, mock_triage, caplog
+):
+    mock_triage.return_value = None  # run_triage_safely's "failed" result
+
+    with caplog.at_level(logging.INFO, logger="app.api.events"):
+        response = _signed_post(client, json.dumps(SAMPLE_EVENT).encode("utf-8"))
+
+    assert response.status_code == 200
+    accepted = [r for r in caplog.records if r.getMessage().startswith("Webhook event")]
+    assert [(r.event_id, r.outcome) for r in accepted] == [("evt-123", "error")]
+
+
+def test_inline_agent_failure_leaves_no_email_content_in_logs(
+    client, inline, monkeypatch, caplog
+):
+    from app.workflows.background import run_triage_safely
+
+    monkeypatch.setattr("app.api.events.run_triage_safely", run_triage_safely)
+    monkeypatch.setattr("app.workflows.background.session_scope", nullcontext)
+    monkeypatch.setattr(
+        "app.workflows.triage_workflow.insert_email_if_new",
+        lambda session, email: SimpleNamespace(id=1),
+    )
+    monkeypatch.setattr(
+        "app.workflows.triage_workflow.analyze_with_metadata",
+        MagicMock(side_effect=RuntimeError(SYNTHETIC_SUBJECT)),
+    )
+
+    with caplog.at_level(logging.INFO):
+        response = _signed_post(client, json.dumps(FULL_EVENT).encode("utf-8"))
+
+    assert response.status_code == 200
+    assert "RuntimeError" in caplog.text
+    assert SYNTHETIC_SUBJECT not in caplog.text
+    assert "Synthetic body." not in caplog.text
+
+
+def test_rejected_signature_is_logged_without_body(client, caplog):
+    with caplog.at_level(logging.INFO, logger="app.api.events"):
+        _signed_post(client, json.dumps(FULL_EVENT).encode("utf-8"), secret="nope")
+
+    assert [r.outcome for r in caplog.records] == ["invalid_signature"]
+    assert SYNTHETIC_SUBJECT not in caplog.text
+    assert "super-secret" not in caplog.text
+
+
+def test_unwritable_raw_event_directory_does_not_fail_the_request(
+    client, monkeypatch, mock_triage, mock_db_persistence
+):
+    monkeypatch.setattr(
+        "app.api.events.store_raw_event",
+        MagicMock(side_effect=PermissionError("read-only filesystem")),
+    )
+
+    response = _signed_post(client, json.dumps(SAMPLE_EVENT).encode("utf-8"))
+
+    assert response.status_code == 200
+    mock_db_persistence.assert_called_once()
+    mock_triage.assert_called_once()

@@ -1,13 +1,16 @@
 """app/services/actions.py: real DB, Nylas integration mocked."""
 
 import threading
+import time
 from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.database.models import ActionType, PendingActionStatus
+from app.database.repository import get_or_create_email
 from app.schemas.email import (
     Email,
     EmailAnalysis,
@@ -15,7 +18,13 @@ from app.schemas.email import (
     SuggestedAction,
     Urgency,
 )
-from app.services.actions import PendingActionError, approve, create_pending_action, reject
+from app.services.actions import (
+    PendingActionError,
+    approve,
+    create_pending_action,
+    propose_action,
+    reject,
+)
 
 
 def _email(email_id: str = "msg-1") -> Email:
@@ -134,6 +143,113 @@ def test_create_pending_action_create_event_without_deadline_uses_placeholder(
 
     assert pending_action.payload["when"]["object"] == "date"
     assert "placeholder" in pending_action.payload["description"].lower()
+
+
+# --- one pending action per (thread, action type) -----------------------------
+
+
+def _pending_action_count(test_engine) -> int:
+    with test_engine.connect() as conn:
+        return conn.execute(text("SELECT count(*) FROM pending_actions")).scalar()
+
+
+def test_second_email_in_thread_reuses_pending_action(test_engine):
+    analysis = _analysis(SuggestedAction.DRAFT_REPLY)
+    first = create_pending_action(_email("msg-1"), analysis, ActionType.DRAFT_REPLY)
+    second = create_pending_action(_email("msg-2"), analysis, ActionType.DRAFT_REPLY)
+
+    assert second.id == first.id
+    assert _pending_action_count(test_engine) == 1
+    assert _audit_actions(test_engine, first.id) == ["created"]
+
+
+def test_other_action_type_in_same_thread_is_not_deduplicated(test_engine):
+    draft = create_pending_action(
+        _email("msg-1"), _analysis(SuggestedAction.DRAFT_REPLY), ActionType.DRAFT_REPLY
+    )
+    archive = create_pending_action(
+        _email("msg-2"), _analysis(SuggestedAction.NONE), ActionType.ARCHIVE
+    )
+
+    assert archive.id != draft.id
+
+
+def _reject(pending_action_id: int) -> None:
+    reject(pending_action_id)
+
+
+def _execute(pending_action_id: int) -> None:
+    with patch("app.services.actions.create_draft", return_value={"id": "d-1"}):
+        approve(pending_action_id)
+
+
+def _fail(pending_action_id: int) -> None:
+    with patch(
+        "app.services.actions.create_draft", side_effect=RuntimeError("boom")
+    ):
+        with pytest.raises(RuntimeError):
+            approve(pending_action_id)
+
+
+@pytest.mark.parametrize("decide", [_reject, _execute, _fail])
+def test_new_pending_action_allowed_once_previous_is_decided(test_engine, decide):
+    analysis = _analysis(SuggestedAction.DRAFT_REPLY)
+    first = create_pending_action(_email("msg-1"), analysis, ActionType.DRAFT_REPLY)
+    decide(first.id)
+
+    second = create_pending_action(_email("msg-2"), analysis, ActionType.DRAFT_REPLY)
+
+    assert second.id != first.id
+    assert second.status == PendingActionStatus.PENDING
+    assert _pending_action_count(test_engine) == 2
+
+
+def _wait_for_lock_waiter(test_engine, timeout: float = 5.0) -> bool:
+    """True once some other backend is blocked waiting on a lock."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with test_engine.connect() as conn:
+            waiting = conn.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+                )
+            ).scalar()
+        if waiting:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_concurrent_creation_in_same_thread_yields_one_row(test_engine):
+    """Two background tasks proposing for the same thread at once: the
+    second's insert blocks on the first's uncommitted row in the unique
+    index, then returns that row once the first commits."""
+    analysis = _analysis(SuggestedAction.DRAFT_REPLY)
+    results: list[int] = []
+
+    def second_task() -> None:
+        action = create_pending_action(
+            _email("msg-2"), analysis, ActionType.DRAFT_REPLY
+        )
+        results.append(action.id)
+
+    with Session(test_engine) as first_session:
+        email = _email("msg-1")
+        email_record = get_or_create_email(first_session, email)
+        first_id = propose_action(
+            first_session, email_record.id, email, analysis, ActionType.DRAFT_REPLY
+        ).id
+
+        second = threading.Thread(target=second_task)
+        second.start()
+        assert _wait_for_lock_waiter(test_engine), "second insert never blocked"
+        first_session.commit()
+
+    second.join(timeout=5)
+    assert results == [first_id]
+    assert _pending_action_count(test_engine) == 1
+    assert _audit_actions(test_engine, first_id) == ["created"]
 
 
 # --- approve(): archive --------------------------------------------------------

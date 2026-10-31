@@ -4,7 +4,8 @@ persistence is recorded in memory and the agent is a fake."""
 
 import copy
 import logging
-from contextlib import nullcontext
+import time
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -269,3 +270,92 @@ def test_wrapper_returns_outcome_on_success(monkeypatch, wrapper_env):
     )
 
     assert run_triage_safely("evt-pipeline-1", EVENT) is TriageOutcome.ACTION_PROPOSED
+
+
+def _recording_scope(outcomes: list[str]):
+    """A `session_scope` stand-in that records whether it committed."""
+
+    @contextmanager
+    def scope():
+        try:
+            yield None
+        except Exception:
+            outcomes.append("rolled_back")
+            raise
+        outcomes.append("committed")
+
+    return scope
+
+
+def test_wrapper_rolls_back_and_skips_embedding_past_its_deadline(
+    monkeypatch, wrapper_env, caplog
+):
+    scopes: list[str] = []
+    monkeypatch.setattr(
+        "app.workflows.background.session_scope", _recording_scope(scopes)
+    )
+    def slow_analyzer(email):
+        time.sleep(0.1)
+        return _run()
+
+    monkeypatch.setattr(
+        "app.workflows.triage_workflow.analyze_with_metadata", slow_analyzer
+    )
+    embed = MagicMock()
+    monkeypatch.setattr("app.workflows.background.embed_event_email_safely", embed)
+
+    with caplog.at_level(logging.INFO):
+        outcome = run_triage_safely(
+            "evt-pipeline-1", EVENT, deadline=time.monotonic() + 0.05
+        )
+
+    assert outcome is None
+    assert scopes == ["rolled_back"]
+    embed.assert_not_called()
+    assert "DeadlineExceeded" in caplog.text
+
+
+def test_wrapper_commits_within_its_deadline(monkeypatch, wrapper_env):
+    scopes: list[str] = []
+    monkeypatch.setattr(
+        "app.workflows.background.session_scope", _recording_scope(scopes)
+    )
+    monkeypatch.setattr(
+        "app.workflows.triage_workflow.analyze_with_metadata", lambda e: _run()
+    )
+    monkeypatch.setattr("app.workflows.background.embed_event_email_safely", MagicMock())
+
+    outcome = run_triage_safely(
+        "evt-pipeline-1", EVENT, deadline=time.monotonic() + 60
+    )
+
+    assert outcome is TriageOutcome.ACTION_PROPOSED
+    assert scopes == ["committed"]
+
+
+def test_wrapper_logs_event_id_and_outcome_as_structured_fields(
+    monkeypatch, wrapper_env, caplog
+):
+    monkeypatch.setattr(
+        "app.workflows.triage_workflow.analyze_with_metadata", lambda e: _run()
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.workflows.background"):
+        run_triage_safely("evt-pipeline-1", EVENT)
+
+    finished = [r for r in caplog.records if r.getMessage().startswith("Triage finished")]
+    assert [(r.event_id, r.outcome) for r in finished] == [
+        ("evt-pipeline-1", "action_proposed")
+    ]
+
+
+def test_wrapper_does_not_start_triage_already_past_its_deadline(
+    monkeypatch, wrapper_env
+):
+    analyzer = MagicMock(return_value=_run())
+    monkeypatch.setattr("app.workflows.triage_workflow.analyze_with_metadata", analyzer)
+
+    outcome = run_triage_safely("evt-pipeline-1", EVENT, deadline=time.monotonic() - 1)
+
+    assert outcome is None
+    analyzer.assert_not_called()

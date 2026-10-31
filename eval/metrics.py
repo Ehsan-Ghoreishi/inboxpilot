@@ -27,6 +27,9 @@ class ItemResult(BaseModel):
     model: str | None = None
     error: str | None = None
     analysis: dict | None = None
+    # `None` for items without a time label (see `eval.run.EvalItem`).
+    time_correct: bool | None = None
+    duration_correct: bool | None = None
 
     @property
     def correct(self) -> bool:
@@ -145,4 +148,24 @@ def slice_accuracy(results: Sequence[ItemResult]) -> dict[str, dict[str, float |
     return {
         tag: {"n": len(members), "accuracy": accuracy(members)}
         for tag, members in sorted(slices.items())
+    }
+
+
+def _rate(flags: Sequence[bool]) -> float | None:
+    return sum(flags) / len(flags) if flags else None
+
+
+def time_extraction_summary(
+    results: Sequence[ItemResult],
+) -> dict[str, float | int | None]:
+    """Over time-labeled items only, separate from category accuracy: is
+    the scheduled start (or the call for clarification) right, and, where
+    a start is expected, is the duration right."""
+    times = [r.time_correct for r in results if r.time_correct is not None]
+    durations = [r.duration_correct for r in results if r.duration_correct is not None]
+    return {
+        "n": len(times),
+        "accuracy": _rate(times),
+        "duration_n": len(durations),
+        "duration_accuracy": _rate(durations),
     }

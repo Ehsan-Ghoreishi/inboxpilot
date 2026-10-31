@@ -190,3 +190,83 @@ def test_agent_failure_rolls_back_then_reprocess_script_picks_it_up(
 
     script.main()
     assert "0 unprocessed raw event(s)" in capsys.readouterr().out
+
+
+def test_reprocess_limit_and_non_message_events(
+    client, analyzer, test_engine, monkeypatch, capsys
+):
+    from app.database.repository import save_raw_event
+    from app.database.session import session_scope
+
+    with session_scope() as session:
+        save_raw_event(
+            session, "evt-grant", {"id": "evt-grant", "type": "grant.expired", "data": {}}
+        )
+        for i in range(3):
+            event = json.loads(json.dumps(EVENT))
+            event["id"] = f"evt-limit-{i}"
+            event["data"]["object"]["id"] = f"msg-limit-{i}"
+            event["data"]["object"]["thread_id"] = f"thread-limit-{i}"
+            save_raw_event(session, event["id"], event)
+
+    script = _load_reprocess_script()
+
+    assert script.main(["--limit", "2"]) == 0
+    assert "2 unprocessed raw event(s)" in capsys.readouterr().out
+    assert _count(test_engine, "emails") == 2
+
+    # The non-message event is never counted as unprocessed, so it can't
+    # occupy a batch slot forever.
+    assert script.main(["--limit", "2"]) == 0
+    assert "1 unprocessed raw event(s)" in capsys.readouterr().out
+    assert script.main([]) == 0
+    assert "0 unprocessed raw event(s)" in capsys.readouterr().out
+    assert _count(test_engine, "emails") == 3
+
+
+def test_inline_processing_triages_before_responding(
+    client, analyzer, test_engine, monkeypatch
+):
+    monkeypatch.setenv("PROCESS_EVENTS_INLINE", "true")
+    get_settings.cache_clear()
+
+    response = _post(client)
+
+    assert response.status_code == 200
+    assert _count(test_engine, "emails") == 1
+    assert _count(test_engine, "pending_actions") == 1
+
+
+def test_inline_timeout_leaves_event_for_the_reprocess_job(
+    client, analyzer, test_engine, monkeypatch, capsys
+):
+    import threading
+
+    monkeypatch.setenv("PROCESS_EVENTS_INLINE", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.api.events.INLINE_PROCESSING_TIMEOUT_SECONDS", 0.2)
+    release = threading.Event()
+    finished = threading.Event()
+
+    def slow_analyzer(email):
+        release.wait(timeout=5)
+        finished.set()
+        return _run()
+
+    analyzer.side_effect = slow_analyzer
+
+    response = _post(client)
+    release.set()
+    finished.wait(timeout=5)
+
+    assert response.status_code == 200
+    # The worker finished after its deadline, so it rolled back. (If it
+    # had committed instead, the reprocess run below would report a
+    # duplicate rather than a proposed action.)
+    assert _count(test_engine, "raw_events") == 1
+    assert _count(test_engine, "emails") == 0
+
+    analyzer.side_effect = None
+    assert _load_reprocess_script().main([]) == 0
+    assert "action_proposed: 1" in capsys.readouterr().out
+    assert _count(test_engine, "pending_actions") == 1
