@@ -2,15 +2,18 @@
 
 These tests are deliberately separate from the fast, fully-mocked tests
 in `tests/` — they need Docker (to bring up the `db` Compose service)
-and talk to real Postgres. If Docker isn't available or Postgres never
-becomes reachable, the whole integration suite is skipped rather than
-erroring the run.
+and talk to real Postgres. If Postgres is already reachable at
+DATABASE_URL (e.g. a CI service container) it is used as-is; otherwise
+the Compose `db` service is started. If neither works, the whole
+integration suite is skipped locally — but fails under CI (`CI` set),
+so a broken database can't turn into a silently green run.
 
 A dedicated `<db>_test` database is created on the same Postgres
 instance used for dev (never the real dev database) and migrated with
 Alembic before any test runs.
 """
 
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -44,6 +47,23 @@ REQUIRED_ENV = {
 }
 
 
+def _skip_or_fail(reason: str) -> None:
+    if os.environ.get("CI"):
+        pytest.fail(reason, pytrace=False)
+    pytest.skip(reason)
+
+
+def _is_reachable(url) -> bool:
+    engine = create_engine(url)
+    try:
+        with engine.connect():
+            return True
+    except Exception:  # noqa: BLE001 - any failure means "not up yet"
+        return False
+    finally:
+        engine.dispose()
+
+
 def _docker_compose_up_db() -> None:
     try:
         result = subprocess.run(
@@ -54,9 +74,9 @@ def _docker_compose_up_db() -> None:
             timeout=120,
         )
     except FileNotFoundError:
-        pytest.skip("docker is not available for integration tests")
+        _skip_or_fail("docker is not available for integration tests")
     if result.returncode != 0:
-        pytest.skip(
+        _skip_or_fail(
             "Could not start the 'db' Postgres service via docker compose: "
             f"{result.stderr.strip()}"
         )
@@ -75,7 +95,7 @@ def _wait_for_postgres(url, timeout: float = 30.0) -> None:
         except Exception as exc:  # noqa: BLE001 - report whatever broke
             last_error = exc
             time.sleep(0.5)
-    pytest.skip(f"Postgres never became reachable at {url}: {last_error}")
+    _skip_or_fail(f"Postgres never became reachable at {url}: {last_error}")
 
 
 def _ensure_database_exists(base_url, db_name: str) -> None:
@@ -97,10 +117,11 @@ def _ensure_database_exists(base_url, db_name: str) -> None:
 @pytest.fixture(scope="session")
 def test_database_url() -> str:
     """URL of a dedicated `<db>_test` database, migrated to head."""
-    _docker_compose_up_db()
-
     base_url = make_url(get_settings().database_url)
-    _wait_for_postgres(base_url.set(database="postgres"))
+    admin_url = base_url.set(database="postgres")
+    if not _is_reachable(admin_url):
+        _docker_compose_up_db()
+    _wait_for_postgres(admin_url)
 
     test_db_name = f"{base_url.database}_test"
     _ensure_database_exists(base_url, test_db_name)

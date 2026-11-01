@@ -135,3 +135,57 @@ def test_blank_secret_is_rejected(monkeypatch, name, blank):
         get_settings()
 
     assert name in str(exc_info.value)
+
+
+def test_environment_defaults_to_local(monkeypatch):
+    _set_required_env(monkeypatch, ENVIRONMENT=None)
+
+    assert get_settings().environment == "local"
+
+
+def test_environment_accepts_production(monkeypatch):
+    _set_required_env(monkeypatch, ENVIRONMENT="production")
+
+    assert get_settings().environment == "production"
+
+
+def test_unknown_environment_is_rejected(monkeypatch):
+    _set_required_env(monkeypatch, ENVIRONMENT="staging")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        get_settings()
+
+    assert "ENVIRONMENT" in str(exc_info.value)
+
+
+def test_process_events_inline_defaults_to_false(monkeypatch):
+    _set_required_env(monkeypatch, PROCESS_EVENTS_INLINE=None)
+
+    assert get_settings().process_events_inline is False
+
+
+def test_process_events_inline_is_overridable(monkeypatch):
+    _set_required_env(monkeypatch, PROCESS_EVENTS_INLINE="true")
+
+    assert get_settings().process_events_inline is True
+
+
+def test_db_pool_settings_default_to_five_and_zero(monkeypatch):
+    _set_required_env(monkeypatch, DB_POOL_SIZE=None, DB_MAX_OVERFLOW=None)
+
+    settings = get_settings()
+
+    assert settings.db_pool_size == 5
+    assert settings.db_max_overflow == 0
+
+
+@pytest.mark.parametrize(
+    ("name", "value"), [("DB_POOL_SIZE", "0"), ("DB_MAX_OVERFLOW", "-1")]
+)
+def test_out_of_range_db_pool_settings_are_rejected(monkeypatch, name, value):
+    _set_required_env(monkeypatch, **{name: value})
+
+    with pytest.raises(RuntimeError) as exc_info:
+        get_settings()
+
+    assert name in str(exc_info.value)

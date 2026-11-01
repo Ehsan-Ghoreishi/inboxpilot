@@ -239,7 +239,9 @@ def side_effects(monkeypatch) -> SimpleNamespace:
         lambda session, email: SimpleNamespace(id=1),
     )
 
-    def _store_pending_action(session, email_record_id, action_type, payload):
+    def _store_pending_action(
+        session, email_record_id, thread_id, action_type, payload
+    ):
         action = SimpleNamespace(
             id=len(recorded.pending_actions) + 1,
             action_type=action_type,
@@ -250,7 +252,8 @@ def side_effects(monkeypatch) -> SimpleNamespace:
         return action
 
     monkeypatch.setattr(
-        "app.services.actions._db_create_pending_action", _store_pending_action
+        "app.services.actions.insert_pending_action_if_absent",
+        _store_pending_action,
     )
     monkeypatch.setattr(
         "app.services.actions.write_audit_log",

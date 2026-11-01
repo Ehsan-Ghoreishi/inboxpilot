@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from app.agents.email_analyzer import (
     PROMPT_VERSION,
@@ -26,7 +26,8 @@ from app.agents.email_analyzer import (
     analyze_with_metadata,
     available_prompt_versions,
 )
-from app.schemas.email import Email, EmailCategory, EmailParticipant
+from app.schemas.email import Email, EmailAnalysis, EmailCategory, EmailParticipant
+from app.services.event_time import resolve_timing
 from eval.metrics import (
     ERROR,
     ItemResult,
@@ -35,6 +36,7 @@ from eval.metrics import (
     confusion_matrix,
     per_class_metrics,
     slice_accuracy,
+    time_extraction_summary,
     usage_summary,
 )
 
@@ -58,6 +60,11 @@ class EvalItem(BaseModel):
     body: str
     sender: EmailParticipant
     label: EmailCategory
+    # Time labels; `expected_needs_clarification` is `None` on items
+    # that aren't scored for time extraction.
+    expected_start_time: AwareDatetime | None = None
+    expected_duration_minutes: int | None = None
+    expected_needs_clarification: bool | None = None
 
 
 def load_dataset(path: Path) -> list[EvalItem]:
@@ -78,6 +85,36 @@ def to_email(item: EvalItem) -> Email:
     )
 
 
+def time_correct(item: EvalItem, analysis: EmailAnalysis | None) -> bool | None:
+    """Scored on what would actually be scheduled (after the deterministic
+    timezone check), not on the model's raw fields. The offset must match
+    too, not just the instant, so a CET/CEST mix-up counts as wrong."""
+    if item.expected_needs_clarification is None:
+        return None
+    if analysis is None:
+        return False
+    timing = resolve_timing(analysis)
+    if item.expected_needs_clarification:
+        return timing.needs_clarification and timing.start is None
+    expected = item.expected_start_time
+    # Instants compared in UTC: inside a DST fold, aware datetimes in
+    # different zones never compare equal (PEP 495).
+    return (
+        timing.start is not None
+        and expected is not None
+        and timing.start.astimezone(timezone.utc) == expected.astimezone(timezone.utc)
+        and timing.start.utcoffset() == expected.utcoffset()
+    )
+
+
+def duration_correct(item: EvalItem, analysis: EmailAnalysis | None) -> bool | None:
+    if item.expected_needs_clarification is not False:
+        return None
+    if analysis is None:
+        return False
+    return resolve_timing(analysis).duration_minutes == item.expected_duration_minutes
+
+
 def evaluate_item(item: EvalItem, analyzer: Analyzer) -> ItemResult:
     """One item; a failed analysis is recorded as an error, not raised,
     so one bad call doesn't lose the rest of the run."""
@@ -93,6 +130,8 @@ def evaluate_item(item: EvalItem, analyzer: Analyzer) -> ItemResult:
             output_tokens=None,
             latency_ms=None,
             error=f"{type(exc).__name__}: {exc}",
+            time_correct=time_correct(item, None),
+            duration_correct=duration_correct(item, None),
         )
     return ItemResult(
         id=item.id,
@@ -104,6 +143,8 @@ def evaluate_item(item: EvalItem, analyzer: Analyzer) -> ItemResult:
         latency_ms=run.latency_ms,
         model=run.model,
         analysis=run.analysis.model_dump(mode="json"),
+        time_correct=time_correct(item, run.analysis),
+        duration_correct=duration_correct(item, run.analysis),
     )
 
 
@@ -117,6 +158,7 @@ def summarize(
         "n": len(results),
         "errors": sum(r.error is not None for r in results),
         "accuracy": accuracy(results),
+        "time_extraction": time_extraction_summary(results),
         "per_class": per_class_metrics(matrix, LABELS),
         "confusion_matrix": matrix,
         "calibration": calibration_table(results),
@@ -130,10 +172,14 @@ def _fmt(value: float | None, spec: str = ".2f") -> str:
 
 
 def format_report(run_info: dict, summary: dict) -> str:
+    time = summary["time_extraction"]
     lines = [
         f"prompt={run_info['prompt_version']}  model={run_info['model']}  "
         f"n={summary['n']}  errors={summary['errors']}",
-        f"accuracy: {summary['accuracy']:.3f}",
+        f"classification accuracy: {summary['accuracy']:.3f}",
+        f"time extraction accuracy: {_fmt(time['accuracy'], '.3f')} "
+        f"(n={time['n']}), duration accuracy: "
+        f"{_fmt(time['duration_accuracy'], '.3f')} (n={time['duration_n']})",
         "",
         f"{'class':<22}{'prec':>7}{'recall':>8}{'f1':>7}{'n':>5}",
     ]

@@ -14,7 +14,19 @@ from app.config import get_settings
 
 @lru_cache
 def get_engine() -> Engine:
-    return create_engine(get_settings().database_url, future=True)
+    # Sized for a small serverless instance: DB_POOL_SIZE + DB_MAX_OVERFLOW
+    # caps connections per process (see `Settings.db_pool_size`). pre_ping
+    # and a short recycle drop connections that the database or a proxy
+    # closed while the instance was idle.
+    settings = get_settings()
+    return create_engine(
+        settings.database_url,
+        future=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_pre_ping=True,
+        pool_recycle=300,
+    )
 
 
 @lru_cache

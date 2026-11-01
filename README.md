@@ -1,5 +1,7 @@
 # InboxPilot
 
+[![CI](https://github.com/Ehsan-Ghoreishi/inboxpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Ehsan-Ghoreishi/inboxpilot/actions/workflows/ci.yml)
+
 An event-driven assistant that triages job-search email: it classifies
 each incoming message, extracts the facts that matter (company, role,
 deadline, urgency), and proposes a next step — a draft reply, a calendar
@@ -70,7 +72,34 @@ uv run uvicorn app.main:app --reload  # API on http://localhost:8000
 ```
 
 Tests: `uv run pytest` (integration tests in `tests/integration/` use
-the Compose database and are skipped if Docker isn't available).
+the Postgres at `DATABASE_URL`, starting the Compose `db` service if it
+isn't reachable, and are skipped if neither works — except under `CI`,
+where they fail instead). Tests never call OpenAI: any real request
+fails the test (`tests/conftest.py`).
+
+### CI
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to
+`main`: `uv sync --frozen`, `uv run alembic upgrade head`, then
+`uv run pytest -q`, against a `pgvector/pgvector:pg16` service with
+dummy credentials. `eval/` is not run in CI (it calls the real OpenAI
+API). To run the same steps locally with CI's environment (variables
+set here override `.env`; optional ones not set here, like
+`RAG_MIN_SCORE`, still come from `.env` if present):
+
+```sh
+docker compose up -d db
+env -i HOME="$HOME" PATH="$PATH" CI=true \
+  DATABASE_URL=postgresql+psycopg://inboxpilot:inboxpilot@localhost:5432/inboxpilot \
+  OPENAI_API_KEY=sk-test-dummy OPENAI_MODEL=gpt-test \
+  NYLAS_API_KEY=nylas-test NYLAS_CLIENT_ID=client-test NYLAS_GRANT_ID=grant-test \
+  WEBHOOK_SECRET=ci-webhook-secret SERVER_URL=http://localhost:8000 \
+  APP_API_KEY=ci-app-key PROCESSING_MODE=test DRY_RUN=false \
+  sh -c 'uv sync --frozen && uv run alembic upgrade head && uv run pytest -q'
+```
+
+Or run the workflow itself in Docker with [act](https://github.com/nektos/act):
+`act pull_request` (stop the Compose `db` first — both bind port 5432).
 
 ## Offline development
 
@@ -93,6 +122,306 @@ events with `scripts/send_fake_event.py`.
 
 `DRY_RUN` defaults to `false`; apply migrations
 (`uv run alembic upgrade head`) to add the `audit_log.dry_run` column.
+
+## Container image and Cloud Run
+
+The `Dockerfile` builds a runtime-only image (Python 3.11 to match
+`requires-python`, `uv sync --frozen --no-dev`, only `app/`, `alembic/`,
+`alembic.ini` and `scripts/`), runs as a non-root user and serves on
+`$PORT` (default 8080). `.dockerignore` keeps `.env*`, `.git`, tests,
+`eval/results` and `requests/` out of the build context. The image sets
+`STORE_RAW_EVENT_FILES=false`: its filesystem is ephemeral and not
+writable by the app user, and the database holds every raw event.
+
+Settings that matter when deployed:
+
+- `ENVIRONMENT=production` disables `/docs`, `/redoc` and
+  `/openapi.json`. Startup logs `ENVIRONMENT`, `PROCESSING_MODE`,
+  `DRY_RUN` and `PROCESS_EVENTS_INLINE` (never secret values).
+- `PROCESS_EVENTS_INLINE=true` triages each webhook event inside the
+  request, within an 8 second budget, instead of as a background task:
+  Cloud Run throttles CPU once a response is sent, which would stall
+  background work. On timeout or error the response is still 200 and
+  the raw event stays unprocessed.
+- `python -m scripts.reprocess_raw_events [--limit N]` (default 50)
+  triages stored events that have no email yet. It is idempotent, prints
+  counts, and exits non-zero if any event failed, so it can run as a
+  scheduled job to retry what inline processing left behind.
+
+Probes: `/health` is liveness and never touches the database; `/ready`
+runs `SELECT 1` and returns 503 when the database is unreachable. Each
+process holds at most `DB_POOL_SIZE + DB_MAX_OVERFLOW` database
+connections (default 5 + 0). Each Cloud Run instance and each run of the
+reprocess job has its own pool, so keep (max instances + jobs) x that
+well below the database's limit; Supabase's session pooler allows 15
+client connections in total.
+
+Logs go to stdout as one JSON object per line (`severity`, `message`,
+and `event_id`/`outcome` where relevant), never with email content,
+tracebacks or secrets.
+
+To send a signed synthetic event to a deployment, use the deployment's
+secret:
+`WEBHOOK_SECRET=... uv run python scripts/send_fake_event.py --url https://<service-url>`
+(`/events` is appended to a bare base URL).
+
+## Deployment
+
+How the image above runs on Google Cloud. Every identifier below
+(`PROJECT_ID`, `REGION`, `SERVICE_ACCOUNT`, `SERVICE_URL`) is a
+placeholder.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    N[Nylas] -->|"signed webhook"| S["Cloud Run service<br/>inboxpilot (API)"]
+    CS["Cloud Scheduler<br/>every 15 min"] -->|"jobs.run"| J["Cloud Run job<br/>inboxpilot-reprocess"]
+    S --> DB[("Supabase Postgres<br/>+ pgvector<br/>session pooler")]
+    J --> DB
+    SM[Secret Manager] -.->|"secrets as env vars"| S
+    SM -.-> J
+```
+
+- **Cloud Run service** `inboxpilot`: the FastAPI app (webhook,
+  `/actions`, `/search`, `/ask`, dashboard, probes). Scales to zero,
+  at most 2 instances.
+- **Cloud Run job** `inboxpilot-reprocess`: the same image running
+  `python -m scripts.reprocess_raw_events`, which triages stored raw
+  events that have no email yet.
+- **Cloud Scheduler** runs the job every 15 minutes.
+- **Secret Manager** holds the four secrets; Cloud Run injects them as
+  environment variables at instance start.
+- **Supabase Postgres with pgvector**, reached through the session
+  pooler (the only target `scripts/migrate_prod.py` accepts).
+- A **dedicated service account** runs both the service and the job. Its
+  only grants are `roles/secretmanager.secretAccessor` on the four
+  secrets and `roles/run.invoker` on the job (so the scheduler can start
+  it).
+
+### Why `PROCESS_EVENTS_INLINE=true`
+
+Locally, triage runs as a background task after `POST /events` returns.
+Cloud Run throttles an instance's CPU once the response has been sent,
+so that background work would stall or be lost when the instance scales
+down. With `PROCESS_EVENTS_INLINE=true` triage runs inside the request,
+within an 8 second budget.
+
+Nothing depends on that budget being met: the raw event is written to
+`raw_events` *before* triage starts, and a timeout or error still
+returns 200. Anything left unprocessed is picked up by the reprocess
+job, which acts as a sweeper. It is idempotent (already-processed
+messages are skipped), so overlapping with inline processing is safe.
+
+### Configuration
+
+All names are fields of `app/config.py`.
+
+| Variable | Purpose | Kind |
+|---|---|---|
+| `DATABASE_URL` | Supabase session-pooler URL, `postgresql+psycopg://` scheme | Secret |
+| `OPENAI_API_KEY` | Classification, embeddings, `/ask` answers | Secret |
+| `WEBHOOK_SECRET` | HMAC key for verifying `X-Nylas-Signature` | Secret |
+| `APP_API_KEY` | Value expected in `X-API-Key` on `/actions`, `/search`, `/ask` | Secret |
+| `ENVIRONMENT` | `production` disables `/docs`, `/redoc`, `/openapi.json` | Plain |
+| `PROCESS_EVENTS_INLINE` | `true`: triage inside the webhook request (see above) | Plain |
+| `PROCESSING_MODE` | `test`: only mail from `TEST_EMAIL` is processed | Plain |
+| `DRY_RUN` | `true`: approvals never call Nylas | Plain |
+| `DB_POOL_SIZE` | Connections kept per process (default 5) | Plain |
+| `DB_MAX_OVERFLOW` | Extra connections per process above the pool (default 0) | Plain |
+| `RAG_MIN_SCORE` | Minimum cosine similarity for `/search` and `/ask` (default 0.30) | Plain |
+
+`app/config.py` also requires `OPENAI_MODEL`, `NYLAS_API_KEY`,
+`NYLAS_CLIENT_ID`, `NYLAS_GRANT_ID` and `SERVER_URL`; the app refuses to
+start without them. While no mailbox is connected and `DRY_RUN=true`,
+Nylas is never called, so the Nylas values can be placeholders. Move
+`NYLAS_API_KEY` into Secret Manager before connecting a real grant.
+`TEST_EMAIL` is optional, but with `PROCESSING_MODE=test` and no
+`TEST_EMAIL`, nothing is processed (the filter fails closed).
+`STORE_RAW_EVENT_FILES=false` is already set by the image.
+
+### Deploy
+
+```sh
+PROJECT_ID=your-project-id
+REGION=your-region
+SERVICE_ACCOUNT=inboxpilot-runtime
+SA_EMAIL="${SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud config set project "$PROJECT_ID"
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com secretmanager.googleapis.com \
+  cloudscheduler.googleapis.com
+```
+
+1. **Create the secrets.** Each command reads the value from stdin
+   (paste it, then Ctrl-D), so it never lands in shell history or a file:
+
+   ```sh
+   for name in DATABASE_URL OPENAI_API_KEY WEBHOOK_SECRET APP_API_KEY; do
+     gcloud secrets create "$name" --replication-policy=automatic --data-file=-
+   done
+   ```
+
+2. **Create the service account** and **grant it access to each secret**
+   (per secret, not project-wide):
+
+   ```sh
+   gcloud iam service-accounts create "$SERVICE_ACCOUNT" \
+     --display-name="InboxPilot runtime"
+   for name in DATABASE_URL OPENAI_API_KEY WEBHOOK_SECRET APP_API_KEY; do
+     gcloud secrets add-iam-policy-binding "$name" \
+       --member="serviceAccount:${SA_EMAIL}" \
+       --role=roles/secretmanager.secretAccessor
+   done
+   ```
+
+3. **Run the migrations** from your machine. `scripts/migrate_prod.py`
+   reads `DATABASE_URL` only from `.env.prod` (gitignored, excluded from
+   the image), refuses anything that isn't the Supabase pooler, and
+   masks the password when printing:
+
+   ```sh
+   uv run python scripts/migrate_prod.py check     # connection + vector extension
+   uv run python scripts/migrate_prod.py upgrade   # alembic upgrade head
+   uv run python scripts/migrate_prod.py report    # tables + alembic_version
+   ```
+
+4. **Deploy the service** from source (Cloud Build builds the
+   `Dockerfile`). It must allow unauthenticated requests so Nylas can
+   reach `/events`; the app does its own authentication (see below).
+
+   ```sh
+   gcloud run deploy inboxpilot --source . --region "$REGION" \
+     --service-account "$SA_EMAIL" \
+     --allow-unauthenticated --min-instances 0 --max-instances 2 \
+     --set-secrets DATABASE_URL=DATABASE_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,WEBHOOK_SECRET=WEBHOOK_SECRET:latest,APP_API_KEY=APP_API_KEY:latest \
+     --set-env-vars ENVIRONMENT=production,PROCESS_EVENTS_INLINE=true,PROCESSING_MODE=test,DRY_RUN=true,DB_POOL_SIZE=5,DB_MAX_OVERFLOW=0,RAG_MIN_SCORE=0.30,OPENAI_MODEL=your-model,NYLAS_API_KEY=unused,NYLAS_CLIENT_ID=unused,NYLAS_GRANT_ID=unused,SERVER_URL=https://SERVICE_URL
+   ```
+
+5. **Create the reprocess job** from the image the service just
+   deployed, so both always run the same code. It runs events one at a
+   time, so a pool of 2 is enough:
+
+   ```sh
+   IMAGE=$(gcloud run services describe inboxpilot --region "$REGION" \
+     --format='value(spec.template.spec.containers[0].image)')
+   gcloud run jobs create inboxpilot-reprocess --image "$IMAGE" --region "$REGION" \
+     --service-account "$SA_EMAIL" --max-retries 0 --task-timeout 10m \
+     --command python --args=-m,scripts.reprocess_raw_events,--limit,50 \
+     --set-secrets DATABASE_URL=DATABASE_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,WEBHOOK_SECRET=WEBHOOK_SECRET:latest,APP_API_KEY=APP_API_KEY:latest \
+     --set-env-vars ENVIRONMENT=production,PROCESSING_MODE=test,DRY_RUN=true,DB_POOL_SIZE=2,DB_MAX_OVERFLOW=0,OPENAI_MODEL=your-model,NYLAS_API_KEY=unused,NYLAS_CLIENT_ID=unused,NYLAS_GRANT_ID=unused,SERVER_URL=https://SERVICE_URL
+   ```
+
+   After a redeploy of the service, point the job at the new image with
+   `gcloud run jobs update inboxpilot-reprocess --image "$IMAGE" --region "$REGION"`.
+
+6. **Schedule the job** every 15 minutes, running as the same service
+   account, which may invoke only this job:
+
+   ```sh
+   gcloud run jobs add-iam-policy-binding inboxpilot-reprocess --region "$REGION" \
+     --member="serviceAccount:${SA_EMAIL}" --role=roles/run.invoker
+   gcloud scheduler jobs create http inboxpilot-reprocess-every-15m \
+     --location "$REGION" --schedule="*/15 * * * *" --http-method POST \
+     --uri="https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/inboxpilot-reprocess:run" \
+     --oauth-service-account-email="$SA_EMAIL"
+   ```
+
+Connection budget with these values: 2 service instances x (5 + 0) plus
+one job run x (2 + 0) = 12 connections, under the session pooler's 15.
+Raising `--max-instances` or the pool sizes needs that sum rechecked.
+
+### Security model
+
+- **Webhook:** `POST /events` recomputes HMAC-SHA256 of the exact raw
+  body with `WEBHOOK_SECRET` and compares it to `X-Nylas-Signature` in
+  constant time before parsing anything; a mismatch is a 401 and nothing
+  is stored. A blank `WEBHOOK_SECRET` or `APP_API_KEY` fails startup.
+- **API key:** `/actions`, `/search` and `/ask` require `X-API-Key`
+  equal to `APP_API_KEY`.
+- **No API docs in production:** `ENVIRONMENT=production` removes
+  `/docs`, `/redoc` and `/openapi.json`.
+- **Secrets only from Secret Manager:** `.dockerignore` keeps every
+  `.env*` file except `.env.example` out of the build context, so no
+  env file is baked into the image. Logs never contain secret values,
+  email content or tracebacks.
+- **`DRY_RUN=true` never calls the email provider:** approved actions
+  get a fake `dry-run-<uuid>` id and audit rows flagged `dry_run`.
+  Triage never calls Nylas in either mode.
+- **Least privilege:** the runtime service account can read the four
+  secrets and start the reprocess job, nothing else.
+- **Not covered:** the dashboard at `/` has no authentication and shows
+  sender addresses and subjects of processed emails. On a public
+  service URL it is reachable by anyone who finds it (see
+  [Known limitations](#known-limitations)).
+
+### Operations
+
+Run the sweeper now instead of waiting for the schedule:
+
+```sh
+gcloud run jobs execute inboxpilot-reprocess --region "$REGION" --wait
+```
+
+Read logs (one JSON object per line, so `severity`, `message`,
+`event_id` and `outcome` are queryable fields):
+
+```sh
+# service: last hour
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="inboxpilot"' \
+  --freshness=1h --limit=50
+# webhook events that timed out inline (left for the job)
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND jsonPayload.outcome="timeout"' --freshness=1d
+# reprocess job runs
+gcloud logging read \
+  'resource.type="cloud_run_job" AND resource.labels.job_name="inboxpilot-reprocess"' \
+  --freshness=1d --limit=50
+```
+
+Check the probes, and the startup line that reports the safety flags:
+
+```sh
+SERVICE_URL=$(gcloud run services describe inboxpilot --region "$REGION" \
+  --format='value(status.url)')
+curl -fsS "$SERVICE_URL/health"   # {"status":"ok"}, no database access
+curl -fsS "$SERVICE_URL/ready"    # {"status":"ready"}, or 503 if the database is unreachable
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND jsonPayload.message:"Starting with ENVIRONMENT="' \
+  --freshness=1d --limit=1
+```
+
+### Cost notes
+
+- The service scales to zero (`--min-instances 0`) and is capped at 2
+  instances, so idle time costs nothing and a burst of webhooks can't
+  scale it up without limit.
+- The deployment is sized to stay within the free tiers of Cloud Run,
+  Cloud Scheduler, Secret Manager and Supabase. That is a dependency,
+  not a guarantee: free-tier terms change, and leaving them (more
+  instances, a paid Supabase plan) changes the bill.
+- OpenAI usage is billed separately and is the main variable cost; it
+  grows with processed email, not with uptime.
+- Set a Cloud Billing budget with an alert on the project (for example
+  at a few dollars), so unexpected usage is noticed early.
+
+### Known limitations
+
+- **Safe mode by default:** the deploy above sets `PROCESSING_MODE=test`
+  and `DRY_RUN=true`. Only mail from `TEST_EMAIL` is triaged, and
+  approvals never reach a mailbox.
+- **No real mailbox connected:** the Nylas settings are placeholders and
+  no webhook is registered against the service, so it only sees signed
+  synthetic events from `scripts/send_fake_event.py`.
+- **Session pooler connection limit:** Supabase's session pooler allows
+  15 client connections in total, shared by every service instance and
+  job run. The current settings use up to 12; more instances or larger
+  pools can exhaust it, which shows up as `/ready` returning 503 and
+  triage failures.
+- **Unauthenticated dashboard:** `/` is public on the service URL (see
+  the general [Limitations](#limitations)).
 
 ## Design decisions
 
@@ -140,13 +469,29 @@ that no single one has to hold:
    the attacker asked for.
 4. **Fixed action shapes.** A draft reply only ever addresses the
    original sender (no cc/bcc); there is no send, forward, or delete
-   action to be tricked into.
+   action to be tricked into. A calendar event's description is built
+   from the email's own subject and sender, never from the model's
+   free-text `reasoning`.
 5. **Human approval** (above) for whatever gets through.
 
 `tests/test_injection.py` runs five malicious emails through the
 pipeline with a *fully fooled* model and asserts these properties hold:
 no tools offered, content stays inside one untrusted block, at most one
 pending action of the routed type, and no Nylas call or approval.
+
+### Meeting times
+
+The analyzer extracts a meeting's `start_time` (ISO 8601 with offset),
+the IANA `timezone` the email states, an optional `duration_minutes`,
+and `needs_clarification` when a time of day or timezone is missing.
+`app/services/event_time.py` then re-checks the model's offset against
+that zone's rules on that date (`Europe/Berlin` is +01:00 in winter,
++02:00 in summer, even if the email says "CET"). A timed event is
+proposed only if everything checks out. Otherwise (missing time or zone,
+unknown zone, wrong offset, a local time skipped by a DST change) the
+proposal is an all-day event titled "[Time TBC] …", never a guessed
+time. Without a stated duration the event is a single point in time
+rather than an invented length.
 
 ## Retrieval-augmented question answering
 
@@ -404,35 +749,61 @@ flag does the rest; the ask eval above measures that combination.
 - **Known open issues** from a security review, not yet fixed:
   any `PROCESSING_MODE` other than `test` processes all mail;
   the webhook stores raw payloads after checking only the signature
-  and `id`, not the full `WebhookEvent` schema; the `Dockerfile`
-  doesn't start the API server and has no `.dockerignore`; archive's
-  folder semantics are unverified for Gmail.
+  and `id`, not the full `WebhookEvent` schema; archive's folder
+  semantics are unverified for Gmail.
 - Email bodies are passed to the model as HTML, unconverted.
 - Retrieval and question-answering limitations are listed under
   [RAG limitations](#rag-limitations).
 
 ## Evaluation
 
-### Classification
+### Classification and time extraction
 
-`eval/dataset.jsonl` holds 50 synthetic, labeled emails — 10 per
-category, including 10 German, 10 deliberately ambiguous, and 5
-adversarial (prompt-injection) examples; all addresses use the reserved
-`.example` domain. Run it with:
+`eval/dataset.jsonl` holds 60 synthetic, labeled emails, all with
+addresses on the reserved `.example` domain:
+
+- 50 for classification: 10 per category, including 10 German, 10
+  deliberately ambiguous, and 5 adversarial (prompt-injection) examples.
+- 10 interview emails (4 German) labeled with the expected start time
+  (ISO 8601 with offset), duration, or that the time needs
+  clarification: missing timezone, missing time of day, "send us your
+  availability", and times on both sides of the 2026-03-29 CET → CEST
+  switch and the 2026-03-08 US DST switch.
+
+Run it with:
 
 ```sh
-uv run python -m eval.run --prompt-version analyze_v1 \
+uv run python -m eval.run --prompt-version analyze_v2 \
   --input-usd-per-mtok <price> --output-usd-per-mtok <price>
 ```
 
-It reports accuracy, per-class precision/recall/F1, a confusion matrix,
-a calibration table (confidence bins vs. actual accuracy), per-slice
+It reports classification accuracy (all 60 items) and time-extraction
+accuracy (the 10 time-labeled items) separately, then per-class
+precision/recall/F1, a confusion matrix, a calibration table, per-slice
 accuracy, mean tokens, estimated cost, and latency per email, and writes
-the full run to `eval/results/<timestamp>.json`.
+the full run to `eval/results/<timestamp>.json`. Time extraction is
+scored on what would actually be scheduled, after the deterministic
+timezone check in `app/services/event_time.py`: the start must match in
+both instant and UTC offset, and a clarification item passes only if no
+timed event would be created.
 
-**Results:** no eval run has been recorded yet. Numbers will be added
-here copied verbatim from an `eval/results/*.json` file, together with
-the model and prompt version that produced them.
+**Results** (`eval/results/20261025T193701Z.json`, `gpt-4o`,
+`analyze_v2`):
+
+| Metric | Result |
+|---|---|
+| Classification accuracy | 0.983 (59/60) |
+| Time-extraction accuracy | 0.900 (9/10) |
+| Duration accuracy | 0.857 (6/7) |
+
+- The one misclassification, `oth-09-amb` (a friend offering a
+  referral), flips between `other` and `recruiter_outreach` from run to
+  run under both `analyze_v1` and `analyze_v2` (2 of 3 repeats each).
+- The one time miss, `time-05` ("Thursday, March 12 at 2pm ET"): the
+  model gave `-05:00` (EST), but US daylight saving had started on
+  March 8 (`-04:00`). The offset check rejected it, so the action
+  became an all-day "[Time TBC]" event rather than a timed event an
+  hour off. Its duration counts as a miss for the same reason.
 
 ### Retrieval and question answering
 

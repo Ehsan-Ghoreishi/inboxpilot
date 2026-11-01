@@ -1,4 +1,5 @@
-.env
+.env*
+!.env.example
 requests/
 __pycache__/
 .venv/
@@ -10,3 +11,9 @@ build/
 .DS_Store
 
 requests/
+
+.env.prod
+
+.env.prod
+
+.env.prod

@@ -22,9 +22,19 @@ from eval.metrics import (
     confusion_matrix,
     per_class_metrics,
     slice_accuracy,
+    time_extraction_summary,
     usage_summary,
 )
-from eval.run import DEFAULT_DATASET, LABELS, _parse_args, load_dataset, run, to_email
+from eval.run import (
+    DEFAULT_DATASET,
+    LABELS,
+    _parse_args,
+    duration_correct,
+    load_dataset,
+    run,
+    time_correct,
+    to_email,
+)
 
 # --- dataset -------------------------------------------------------------------
 
@@ -34,9 +44,31 @@ def dataset():
     return load_dataset(DEFAULT_DATASET)
 
 
-def test_dataset_has_50_items_balanced_across_categories(dataset):
-    assert len(dataset) == 50
-    assert Counter(item.label for item in dataset) == {c: 10 for c in EmailCategory}
+def test_dataset_has_50_category_items_balanced_plus_10_time_items(dataset):
+    category_items = [i for i in dataset if i.expected_needs_clarification is None]
+    time_items = [i for i in dataset if i.expected_needs_clarification is not None]
+    assert len(category_items) == 50
+    assert Counter(i.label for i in category_items) == {c: 10 for c in EmailCategory}
+    assert len(time_items) == 10
+
+
+def test_time_items_are_labeled_consistently(dataset):
+    time_items = [i for i in dataset if i.expected_needs_clarification is not None]
+    for item in time_items:
+        if item.expected_needs_clarification:
+            assert item.expected_start_time is None, item.id
+            assert item.expected_duration_minutes is None, item.id
+        else:
+            assert item.expected_start_time is not None, item.id
+    assert sum(i.expected_needs_clarification for i in time_items) >= 3
+    assert sum(i.id.endswith("-de") for i in time_items) >= 3
+    # Both sides of the 2026-03-29 CET -> CEST switch are covered.
+    offsets = {
+        i.expected_start_time.utcoffset().total_seconds() / 3600
+        for i in time_items
+        if i.expected_start_time and i.expected_start_time.year == 2026
+    }
+    assert {1.0, 2.0} <= offsets
 
 
 def test_dataset_ids_are_unique(dataset):
@@ -167,6 +199,73 @@ def test_slice_accuracy():
     assert slices["adv"] == {"n": 1, "accuracy": 0.0}
 
 
+def test_time_extraction_summary_ignores_unlabeled_items():
+    results = [
+        _r("a", "other", "other").model_copy(update={"time_correct": True}),
+        _r("b", "other", "other").model_copy(
+            update={"time_correct": False, "duration_correct": True}
+        ),
+        _r("c", "other", "other"),
+    ]
+
+    assert time_extraction_summary(results) == {
+        "n": 2,
+        "accuracy": 0.5,
+        "duration_n": 1,
+        "duration_accuracy": 1.0,
+    }
+
+
+# --- time scoring --------------------------------------------------------------
+
+
+def _time_item(dataset, item_id):
+    return next(item for item in dataset if item.id == item_id)
+
+
+def _with_time(**fields) -> EmailAnalysis:
+    return EmailAnalysis(
+        category=EmailCategory.INTERVIEW_INVITE,
+        urgency=Urgency.MEDIUM,
+        suggested_action=SuggestedAction.CREATE_EVENT,
+        reasoning="fake",
+        confidence=0.9,
+        **fields,
+    )
+
+
+def test_time_correct_requires_the_offset_for_that_date(dataset):
+    item = _time_item(dataset, "time-03-de")  # 31 March, 09:00 German time
+    right = _with_time(
+        start_time="2026-03-31T09:00:00+02:00",
+        timezone="Europe/Berlin",
+        duration_minutes=90,
+    )
+    winter_offset = _with_time(
+        start_time="2026-03-31T09:00:00+01:00", timezone="Europe/Berlin"
+    )
+
+    assert time_correct(item, right) is True
+    assert duration_correct(item, right) is True
+    assert time_correct(item, winter_offset) is False
+
+
+def test_time_correct_for_a_clarification_item(dataset):
+    item = _time_item(dataset, "time-06")  # "Wednesday at 3pm", no zone
+    guessed = _with_time(
+        start_time="2026-03-04T15:00:00+01:00", timezone="Europe/Berlin"
+    )
+
+    assert time_correct(item, _with_time(needs_clarification=True)) is True
+    assert time_correct(item, guessed) is False
+    assert duration_correct(item, guessed) is None
+
+
+def test_unlabeled_and_errored_items(dataset):
+    assert time_correct(dataset[0], _with_time()) is None
+    assert time_correct(_time_item(dataset, "time-01"), None) is False
+
+
 # --- full run with a fake analyzer ---------------------------------------------
 
 
@@ -203,12 +302,26 @@ def test_run_writes_results_and_reports_all_sections(tmp_path, capsys):
 
     data = json.loads(out_path.read_text())
     assert out_path.parent == tmp_path
-    assert data["run"]["prompt_version"] == "analyze_v1"
+    assert data["run"]["prompt_version"] == "analyze_v2"
     assert data["run"]["model"] == "fake-model"
-    assert len(data["items"]) == 50
+    assert len(data["items"]) == 60
     assert data["summary"]["errors"] == 1
-    assert data["summary"]["accuracy"] == pytest.approx(10 / 50)
-    for section in ("accuracy:", "prec", "confusion matrix", "0.7-0.9", "mean latency"):
+    assert data["summary"]["accuracy"] == pytest.approx(10 / 60)
+    # The fake extracts no times and never asks for clarification.
+    assert data["summary"]["time_extraction"] == {
+        "n": 10,
+        "accuracy": 0.0,
+        "duration_n": 7,
+        "duration_accuracy": 0.0,
+    }
+    for section in (
+        "classification accuracy:",
+        "time extraction accuracy: 0.000 (n=10)",
+        "prec",
+        "confusion matrix",
+        "0.7-0.9",
+        "mean latency",
+    ):
         assert section in report
     assert "$0.000700" in report  # (500 * 1 + 50 * 4) / 1e6
 

@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 from app.database.models import ActionType, PendingActionStatus
 from app.database.repository import (
-    create_pending_action,
     get_or_create_email,
+    insert_pending_action_if_absent,
     save_classification,
     save_raw_event,
     update_pending_action_status,
@@ -116,9 +116,10 @@ def test_save_classification_links_to_email(db_session):
 def test_create_and_update_pending_action(db_session):
     email_record = get_or_create_email(db_session, SAMPLE_EMAIL)
 
-    pending_action = create_pending_action(
+    pending_action = insert_pending_action_if_absent(
         db_session,
         email_record.id,
+        email_record.thread_id,
         ActionType.CREATE_EVENT,
         payload={"start": "2026-02-07T14:00:00-08:00"},
     )
@@ -136,8 +137,12 @@ def test_create_and_update_pending_action(db_session):
 
 def test_write_audit_log_links_to_pending_action(db_session):
     email_record = get_or_create_email(db_session, SAMPLE_EMAIL)
-    pending_action = create_pending_action(
-        db_session, email_record.id, ActionType.DRAFT_REPLY, payload={}
+    pending_action = insert_pending_action_if_absent(
+        db_session,
+        email_record.id,
+        email_record.thread_id,
+        ActionType.DRAFT_REPLY,
+        payload={},
     )
 
     entry = write_audit_log(
