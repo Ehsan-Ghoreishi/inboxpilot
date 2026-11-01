@@ -165,6 +165,264 @@ secret:
 `WEBHOOK_SECRET=... uv run python scripts/send_fake_event.py --url https://<service-url>`
 (`/events` is appended to a bare base URL).
 
+## Deployment
+
+How the image above runs on Google Cloud. Every identifier below
+(`PROJECT_ID`, `REGION`, `SERVICE_ACCOUNT`, `SERVICE_URL`) is a
+placeholder.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    N[Nylas] -->|"signed webhook"| S["Cloud Run service<br/>inboxpilot (API)"]
+    CS["Cloud Scheduler<br/>every 15 min"] -->|"jobs.run"| J["Cloud Run job<br/>inboxpilot-reprocess"]
+    S --> DB[("Supabase Postgres<br/>+ pgvector<br/>session pooler")]
+    J --> DB
+    SM[Secret Manager] -.->|"secrets as env vars"| S
+    SM -.-> J
+```
+
+- **Cloud Run service** `inboxpilot`: the FastAPI app (webhook,
+  `/actions`, `/search`, `/ask`, dashboard, probes). Scales to zero,
+  at most 2 instances.
+- **Cloud Run job** `inboxpilot-reprocess`: the same image running
+  `python -m scripts.reprocess_raw_events`, which triages stored raw
+  events that have no email yet.
+- **Cloud Scheduler** runs the job every 15 minutes.
+- **Secret Manager** holds the four secrets; Cloud Run injects them as
+  environment variables at instance start.
+- **Supabase Postgres with pgvector**, reached through the session
+  pooler (the only target `scripts/migrate_prod.py` accepts).
+- A **dedicated service account** runs both the service and the job. Its
+  only grants are `roles/secretmanager.secretAccessor` on the four
+  secrets and `roles/run.invoker` on the job (so the scheduler can start
+  it).
+
+### Why `PROCESS_EVENTS_INLINE=true`
+
+Locally, triage runs as a background task after `POST /events` returns.
+Cloud Run throttles an instance's CPU once the response has been sent,
+so that background work would stall or be lost when the instance scales
+down. With `PROCESS_EVENTS_INLINE=true` triage runs inside the request,
+within an 8 second budget.
+
+Nothing depends on that budget being met: the raw event is written to
+`raw_events` *before* triage starts, and a timeout or error still
+returns 200. Anything left unprocessed is picked up by the reprocess
+job, which acts as a sweeper. It is idempotent (already-processed
+messages are skipped), so overlapping with inline processing is safe.
+
+### Configuration
+
+All names are fields of `app/config.py`.
+
+| Variable | Purpose | Kind |
+|---|---|---|
+| `DATABASE_URL` | Supabase session-pooler URL, `postgresql+psycopg://` scheme | Secret |
+| `OPENAI_API_KEY` | Classification, embeddings, `/ask` answers | Secret |
+| `WEBHOOK_SECRET` | HMAC key for verifying `X-Nylas-Signature` | Secret |
+| `APP_API_KEY` | Value expected in `X-API-Key` on `/actions`, `/search`, `/ask` | Secret |
+| `ENVIRONMENT` | `production` disables `/docs`, `/redoc`, `/openapi.json` | Plain |
+| `PROCESS_EVENTS_INLINE` | `true`: triage inside the webhook request (see above) | Plain |
+| `PROCESSING_MODE` | `test`: only mail from `TEST_EMAIL` is processed | Plain |
+| `DRY_RUN` | `true`: approvals never call Nylas | Plain |
+| `DB_POOL_SIZE` | Connections kept per process (default 5) | Plain |
+| `DB_MAX_OVERFLOW` | Extra connections per process above the pool (default 0) | Plain |
+| `RAG_MIN_SCORE` | Minimum cosine similarity for `/search` and `/ask` (default 0.30) | Plain |
+
+`app/config.py` also requires `OPENAI_MODEL`, `NYLAS_API_KEY`,
+`NYLAS_CLIENT_ID`, `NYLAS_GRANT_ID` and `SERVER_URL`; the app refuses to
+start without them. While no mailbox is connected and `DRY_RUN=true`,
+Nylas is never called, so the Nylas values can be placeholders. Move
+`NYLAS_API_KEY` into Secret Manager before connecting a real grant.
+`TEST_EMAIL` is optional, but with `PROCESSING_MODE=test` and no
+`TEST_EMAIL`, nothing is processed (the filter fails closed).
+`STORE_RAW_EVENT_FILES=false` is already set by the image.
+
+### Deploy
+
+```sh
+PROJECT_ID=your-project-id
+REGION=your-region
+SERVICE_ACCOUNT=inboxpilot-runtime
+SA_EMAIL="${SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud config set project "$PROJECT_ID"
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com secretmanager.googleapis.com \
+  cloudscheduler.googleapis.com
+```
+
+1. **Create the secrets.** Each command reads the value from stdin
+   (paste it, then Ctrl-D), so it never lands in shell history or a file:
+
+   ```sh
+   for name in DATABASE_URL OPENAI_API_KEY WEBHOOK_SECRET APP_API_KEY; do
+     gcloud secrets create "$name" --replication-policy=automatic --data-file=-
+   done
+   ```
+
+2. **Create the service account** and **grant it access to each secret**
+   (per secret, not project-wide):
+
+   ```sh
+   gcloud iam service-accounts create "$SERVICE_ACCOUNT" \
+     --display-name="InboxPilot runtime"
+   for name in DATABASE_URL OPENAI_API_KEY WEBHOOK_SECRET APP_API_KEY; do
+     gcloud secrets add-iam-policy-binding "$name" \
+       --member="serviceAccount:${SA_EMAIL}" \
+       --role=roles/secretmanager.secretAccessor
+   done
+   ```
+
+3. **Run the migrations** from your machine. `scripts/migrate_prod.py`
+   reads `DATABASE_URL` only from `.env.prod` (gitignored, excluded from
+   the image), refuses anything that isn't the Supabase pooler, and
+   masks the password when printing:
+
+   ```sh
+   uv run python scripts/migrate_prod.py check     # connection + vector extension
+   uv run python scripts/migrate_prod.py upgrade   # alembic upgrade head
+   uv run python scripts/migrate_prod.py report    # tables + alembic_version
+   ```
+
+4. **Deploy the service** from source (Cloud Build builds the
+   `Dockerfile`). It must allow unauthenticated requests so Nylas can
+   reach `/events`; the app does its own authentication (see below).
+
+   ```sh
+   gcloud run deploy inboxpilot --source . --region "$REGION" \
+     --service-account "$SA_EMAIL" \
+     --allow-unauthenticated --min-instances 0 --max-instances 2 \
+     --set-secrets DATABASE_URL=DATABASE_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,WEBHOOK_SECRET=WEBHOOK_SECRET:latest,APP_API_KEY=APP_API_KEY:latest \
+     --set-env-vars ENVIRONMENT=production,PROCESS_EVENTS_INLINE=true,PROCESSING_MODE=test,DRY_RUN=true,DB_POOL_SIZE=5,DB_MAX_OVERFLOW=0,RAG_MIN_SCORE=0.30,OPENAI_MODEL=your-model,NYLAS_API_KEY=unused,NYLAS_CLIENT_ID=unused,NYLAS_GRANT_ID=unused,SERVER_URL=https://SERVICE_URL
+   ```
+
+5. **Create the reprocess job** from the image the service just
+   deployed, so both always run the same code. It runs events one at a
+   time, so a pool of 2 is enough:
+
+   ```sh
+   IMAGE=$(gcloud run services describe inboxpilot --region "$REGION" \
+     --format='value(spec.template.spec.containers[0].image)')
+   gcloud run jobs create inboxpilot-reprocess --image "$IMAGE" --region "$REGION" \
+     --service-account "$SA_EMAIL" --max-retries 0 --task-timeout 10m \
+     --command python --args=-m,scripts.reprocess_raw_events,--limit,50 \
+     --set-secrets DATABASE_URL=DATABASE_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,WEBHOOK_SECRET=WEBHOOK_SECRET:latest,APP_API_KEY=APP_API_KEY:latest \
+     --set-env-vars ENVIRONMENT=production,PROCESSING_MODE=test,DRY_RUN=true,DB_POOL_SIZE=2,DB_MAX_OVERFLOW=0,OPENAI_MODEL=your-model,NYLAS_API_KEY=unused,NYLAS_CLIENT_ID=unused,NYLAS_GRANT_ID=unused,SERVER_URL=https://SERVICE_URL
+   ```
+
+   After a redeploy of the service, point the job at the new image with
+   `gcloud run jobs update inboxpilot-reprocess --image "$IMAGE" --region "$REGION"`.
+
+6. **Schedule the job** every 15 minutes, running as the same service
+   account, which may invoke only this job:
+
+   ```sh
+   gcloud run jobs add-iam-policy-binding inboxpilot-reprocess --region "$REGION" \
+     --member="serviceAccount:${SA_EMAIL}" --role=roles/run.invoker
+   gcloud scheduler jobs create http inboxpilot-reprocess-every-15m \
+     --location "$REGION" --schedule="*/15 * * * *" --http-method POST \
+     --uri="https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/inboxpilot-reprocess:run" \
+     --oauth-service-account-email="$SA_EMAIL"
+   ```
+
+Connection budget with these values: 2 service instances x (5 + 0) plus
+one job run x (2 + 0) = 12 connections, under the session pooler's 15.
+Raising `--max-instances` or the pool sizes needs that sum rechecked.
+
+### Security model
+
+- **Webhook:** `POST /events` recomputes HMAC-SHA256 of the exact raw
+  body with `WEBHOOK_SECRET` and compares it to `X-Nylas-Signature` in
+  constant time before parsing anything; a mismatch is a 401 and nothing
+  is stored. A blank `WEBHOOK_SECRET` or `APP_API_KEY` fails startup.
+- **API key:** `/actions`, `/search` and `/ask` require `X-API-Key`
+  equal to `APP_API_KEY`.
+- **No API docs in production:** `ENVIRONMENT=production` removes
+  `/docs`, `/redoc` and `/openapi.json`.
+- **Secrets only from Secret Manager:** `.dockerignore` keeps every
+  `.env*` file except `.env.example` out of the build context, so no
+  env file is baked into the image. Logs never contain secret values,
+  email content or tracebacks.
+- **`DRY_RUN=true` never calls the email provider:** approved actions
+  get a fake `dry-run-<uuid>` id and audit rows flagged `dry_run`.
+  Triage never calls Nylas in either mode.
+- **Least privilege:** the runtime service account can read the four
+  secrets and start the reprocess job, nothing else.
+- **Not covered:** the dashboard at `/` has no authentication and shows
+  sender addresses and subjects of processed emails. On a public
+  service URL it is reachable by anyone who finds it (see
+  [Known limitations](#known-limitations)).
+
+### Operations
+
+Run the sweeper now instead of waiting for the schedule:
+
+```sh
+gcloud run jobs execute inboxpilot-reprocess --region "$REGION" --wait
+```
+
+Read logs (one JSON object per line, so `severity`, `message`,
+`event_id` and `outcome` are queryable fields):
+
+```sh
+# service: last hour
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="inboxpilot"' \
+  --freshness=1h --limit=50
+# webhook events that timed out inline (left for the job)
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND jsonPayload.outcome="timeout"' --freshness=1d
+# reprocess job runs
+gcloud logging read \
+  'resource.type="cloud_run_job" AND resource.labels.job_name="inboxpilot-reprocess"' \
+  --freshness=1d --limit=50
+```
+
+Check the probes, and the startup line that reports the safety flags:
+
+```sh
+SERVICE_URL=$(gcloud run services describe inboxpilot --region "$REGION" \
+  --format='value(status.url)')
+curl -fsS "$SERVICE_URL/health"   # {"status":"ok"}, no database access
+curl -fsS "$SERVICE_URL/ready"    # {"status":"ready"}, or 503 if the database is unreachable
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND jsonPayload.message:"Starting with ENVIRONMENT="' \
+  --freshness=1d --limit=1
+```
+
+### Cost notes
+
+- The service scales to zero (`--min-instances 0`) and is capped at 2
+  instances, so idle time costs nothing and a burst of webhooks can't
+  scale it up without limit.
+- The deployment is sized to stay within the free tiers of Cloud Run,
+  Cloud Scheduler, Secret Manager and Supabase. That is a dependency,
+  not a guarantee: free-tier terms change, and leaving them (more
+  instances, a paid Supabase plan) changes the bill.
+- OpenAI usage is billed separately and is the main variable cost; it
+  grows with processed email, not with uptime.
+- Set a Cloud Billing budget with an alert on the project (for example
+  at a few dollars), so unexpected usage is noticed early.
+
+### Known limitations
+
+- **Safe mode by default:** the deploy above sets `PROCESSING_MODE=test`
+  and `DRY_RUN=true`. Only mail from `TEST_EMAIL` is triaged, and
+  approvals never reach a mailbox.
+- **No real mailbox connected:** the Nylas settings are placeholders and
+  no webhook is registered against the service, so it only sees signed
+  synthetic events from `scripts/send_fake_event.py`.
+- **Session pooler connection limit:** Supabase's session pooler allows
+  15 client connections in total, shared by every service instance and
+  job run. The current settings use up to 12; more instances or larger
+  pools can exhaust it, which shows up as `/ready` returning 503 and
+  triage failures.
+- **Unauthenticated dashboard:** `/` is public on the service URL (see
+  the general [Limitations](#limitations)).
+
 ## Design decisions
 
 ### Approval gate
