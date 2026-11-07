@@ -101,6 +101,33 @@ env -i HOME="$HOME" PATH="$PATH" CI=true \
 Or run the workflow itself in Docker with [act](https://github.com/nektos/act):
 `act pull_request` (stop the Compose `db` first — both bind port 5432).
 
+## Demo
+
+`scripts/demo.py` walks a running service through the whole flow for a
+live presentation: liveness, a rejected bad signature, a signed
+interview email, the proposed action, approval (audit log shows
+`dry_run`), an answerable `/ask` with its citation, and an unanswerable
+one that is refused. Each step prints its expectation and `PASS`/`FAIL`;
+the exit code is non-zero if any step fails.
+
+```sh
+WEBHOOK_SECRET=... APP_API_KEY=... \
+  uv run python -m scripts.demo --url https://<host> [--pause]
+```
+
+- Secrets are read only from the environment and never printed.
+  `--pause` waits for Enter between steps.
+- Point it only at a deployment with `DRY_RUN=true`: step 5 approves a
+  real pending action, and `DRY_RUN` is what keeps that from creating a
+  calendar event. With `PROCESSING_MODE=test`, set `TEST_EMAIL` to the
+  mailbox the service accepts so the demo email is processed.
+- Every run uses fresh `demo-` message and thread ids, so reruns don't
+  collide with the one-pending-action-per-thread rule. The demo email
+  and its pending action remain in the database afterwards.
+- It uses `GET /actions` (which includes each action's `message_id`,
+  `category` and `confidence`) and `GET /actions/{id}/audit`, both behind
+  `X-API-Key`.
+
 ## Offline development
 
 Set `DRY_RUN=true` in `.env` to run the full approval flow without a

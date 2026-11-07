@@ -14,14 +14,32 @@ from sqlalchemy.exc import NoResultFound
 
 from app.api.auth import require_api_key
 from app.database.models import PendingAction, PendingActionStatus
-from app.database.repository import list_pending_actions
+from app.database.repository import list_audit_log, list_pending_actions
 from app.database.session import session_scope
-from app.schemas.actions import PendingActionList, PendingActionOut
+from app.schemas.actions import (
+    AuditLogEntryOut,
+    AuditLogList,
+    PendingActionDetail,
+    PendingActionList,
+    PendingActionOut,
+)
 from app.services import actions as actions_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/actions", dependencies=[Depends(require_api_key)])
+
+
+def _detail(action: PendingAction) -> PendingActionDetail:
+    latest = max(
+        action.email.classifications, key=lambda c: c.created_at, default=None
+    )
+    return PendingActionDetail(
+        **PendingActionOut.model_validate(action).model_dump(),
+        message_id=action.email.nylas_message_id,
+        category=latest.category if latest else None,
+        confidence=latest.confidence if latest else None,
+    )
 
 
 @router.get("")
@@ -30,10 +48,25 @@ def get_actions(
 ) -> PendingActionList:
     with session_scope() as session:
         actions = [
-            PendingActionOut.model_validate(action)
-            for action in list_pending_actions(session, status)
+            _detail(action) for action in list_pending_actions(session, status)
         ]
     return PendingActionList(actions=actions)
+
+
+@router.get("/{pending_action_id}/audit")
+def get_audit_log(pending_action_id: int) -> AuditLogList:
+    """The audit trail of one action, oldest first."""
+    with session_scope() as session:
+        if session.get(PendingAction, pending_action_id) is None:
+            raise HTTPException(
+                http_status.HTTP_404_NOT_FOUND, "Pending action not found"
+            )
+        return AuditLogList(
+            entries=[
+                AuditLogEntryOut.model_validate(entry)
+                for entry in list_audit_log(session, pending_action_id)
+            ]
+        )
 
 
 def _decide(

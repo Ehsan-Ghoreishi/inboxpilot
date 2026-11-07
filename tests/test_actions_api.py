@@ -26,6 +26,7 @@ ENDPOINTS = [
     ("get", "/actions?status=pending"),
     ("post", "/actions/1/approve"),
     ("post", "/actions/1/reject"),
+    ("get", "/actions/1/audit"),
 ]
 
 

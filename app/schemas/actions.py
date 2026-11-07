@@ -20,8 +20,29 @@ class PendingActionOut(BaseModel):
     decided_at: datetime | None
 
 
+class PendingActionDetail(PendingActionOut):
+    """A pending action plus the email it concerns, for reviewing a queue."""
+
+    message_id: str
+    category: str | None
+    confidence: float | None
+
+
 class PendingActionList(BaseModel):
-    actions: list[PendingActionOut]
+    actions: list[PendingActionDetail]
+
+
+class AuditLogEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    actor: str
+    action: str
+    dry_run: bool
+    at: datetime
+
+
+class AuditLogList(BaseModel):
+    entries: list[AuditLogEntryOut]
 
 
 class ClassificationOut(BaseModel):
