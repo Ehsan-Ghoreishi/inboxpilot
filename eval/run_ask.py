@@ -440,7 +440,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.min_score is None:
         args.min_score = settings.rag_min_score
 
-    corpus = load_dataset(args.corpus)
+    corpus = load_dataset(args.corpus, suite="base")
     check_expected_ids(load_questions(args.dataset), corpus)
 
     url = eval_database_url(settings.database_url)

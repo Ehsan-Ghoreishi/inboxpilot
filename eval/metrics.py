@@ -1,11 +1,16 @@
 """Pure metric functions over eval results (no I/O, no model calls)."""
 
 from collections.abc import Sequence
+from math import sqrt
 from statistics import mean
 
 from pydantic import BaseModel
 
 ERROR = "(error)"
+
+# A missed one of these is the costly error: the candidate never hears
+# about an interview or a deadline.
+CRITICAL_LABELS = ("interview_invite", "assessment_deadline")
 
 # Half-open [lo, hi), except the last bin, which includes 1.0.
 CALIBRATION_BINS: list[tuple[float, float]] = [
@@ -30,6 +35,10 @@ class ItemResult(BaseModel):
     # `None` for items without a time label (see `eval.run.EvalItem`).
     time_correct: bool | None = None
     duration_correct: bool | None = None
+    # Dataset tags, for slicing (see `eval.run.EvalItem`).
+    language: str | None = None
+    difficulty: str | None = None
+    split: str | None = None
 
     @property
     def correct(self) -> bool:
@@ -149,6 +158,56 @@ def slice_accuracy(results: Sequence[ItemResult]) -> dict[str, dict[str, float |
         tag: {"n": len(members), "accuracy": accuracy(members)}
         for tag, members in sorted(slices.items())
     }
+
+
+def tag_accuracy(
+    results: Sequence[ItemResult], field: str
+) -> dict[str, dict[str, float | int]]:
+    """Accuracy per value of a tag field (`language`, `difficulty`).
+    Items without the tag are left out."""
+    groups: dict[str, list[ItemResult]] = {}
+    for r in results:
+        value = getattr(r, field)
+        if value is not None:
+            groups.setdefault(value, []).append(r)
+    return {
+        value: {"n": len(members), "accuracy": accuracy(members)}
+        for value, members in sorted(groups.items())
+    }
+
+
+def critical_recall(
+    matrix: dict[str, dict[str, int]], labels: Sequence[str] = CRITICAL_LABELS
+) -> dict[str, dict[str, float | int | None | dict[str, int]]]:
+    """Recall for the costly classes on their own, with the number missed
+    and what the misses were taken for."""
+    out: dict[str, dict[str, float | int | None | dict[str, int]]] = {}
+    for label in labels:
+        row = matrix[label]
+        support = sum(row.values())
+        missed_as = {col: n for col, n in row.items() if col != label and n}
+        out[label] = {
+            "recall": row[label] / support if support else None,
+            "support": support,
+            "missed": sum(missed_as.values()),
+            "missed_as": missed_as,
+        }
+    return out
+
+
+def wilson_interval(
+    successes: int, n: int, z: float = 1.96
+) -> tuple[float, float] | None:
+    """Wilson score interval for a proportion (95% for the default `z`).
+    `None` when there are no trials. Unlike the normal approximation it
+    stays inside [0, 1] and is honest at small n and at 0% or 100%."""
+    if n == 0:
+        return None
+    p = successes / n
+    denominator = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denominator
+    half = z * sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator
+    return max(0.0, centre - half), min(1.0, centre + half)
 
 
 def _rate(flags: Sequence[bool]) -> float | None:

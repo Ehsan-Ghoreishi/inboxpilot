@@ -826,8 +826,10 @@ Run, keep the secret key in Secret Manager like the other secrets.
 
 ### Classification and time extraction
 
-`eval/dataset.jsonl` holds 60 synthetic, labeled emails, all with
-addresses on the reserved `.example` domain:
+`eval/dataset.jsonl` holds synthetic, labeled emails, all with
+addresses on the reserved `.example` domain. Every item is tagged with a
+`language` (`en`, `de`, `mixed`) and a `difficulty` (`easy`, `medium`,
+`hard`) for slicing. The original 60 are the `base` suite:
 
 - 50 for classification: 10 per category, including 10 German, 10
   deliberately ambiguous, and 5 adversarial (prompt-injection) examples.
@@ -837,25 +839,56 @@ addresses on the reserved `.example` domain:
   availability", and times on both sides of the 2026-03-29 CET → CEST
   switch and the 2026-03-08 US DST switch.
 
+The `hard` suite adds 44 classification items that are hard on purpose
+(each has a `note` giving the reason for its label): German-only and
+mixed German/English mails, forwarded recruiter and agency mails,
+reschedules versus new interviews, soft rejections ("we will keep your CV
+on file"), automated "application received" confirmations (`other`),
+job-board newsletters that mention interviews, assessment links with
+relative deadlines, spam and phishing "recruiters" (`other`), and
+multi-intent mails. Where one mail holds several intents, the actionable
+interview or assessment wins over a rejection or an outreach. The
+retrieval and ask evals use only the `base` suite as their corpus.
+
+**Dev and test split.** `assign_splits` divides the dataset 50/50,
+stratified by category, with a fixed seed (`SPLIT_SEED` in `eval/run.py`);
+the split is not stored in the file, and adding or editing items re-draws
+it. Only the dev split may be used for prompt tuning, so it is the
+default. Run `--split test` for a final number only, and `--split all`
+for the whole set.
+
 Run it with:
 
 ```sh
-uv run python -m eval.run --prompt-version analyze_v2 \
+uv run python -m eval.run --prompt-version analyze_v2 [--split dev|test|all] \
   --input-usd-per-mtok <price> --output-usd-per-mtok <price>
 ```
 
-It reports classification accuracy (all 60 items) and time-extraction
-accuracy (the 10 time-labeled items) separately, then per-class
-precision/recall/F1, a confusion matrix, a calibration table, per-slice
-accuracy, mean tokens, estimated cost, and latency per email, and writes
-the full run to `eval/results/<timestamp>.json`. Time extraction is
+It reports classification accuracy and time-extraction accuracy (the
+10 time-labeled items) separately, then per-class precision/recall/F1,
+the recall of `interview_invite` and `assessment_deadline` on their own
+(a missed one is the costly error), a confusion matrix, a calibration
+table, accuracy per language, difficulty and id slice, mean tokens,
+estimated cost, and latency per email, and writes the full run to
+`eval/results/<timestamp>.json`.
+
+Each email is its own Langfuse trace (`eval_item`, tag `eval`) with a
+boolean `correct` score, sent through the same tracing client as the
+app: email text stays redacted unless `TRACE_EMAIL_CONTENT=true` and
+`PROCESSING_MODE=test`, and tracing is flushed and shut down when the run
+ends. Trace metadata holds only the item id, labels, split and tags.
+
+`uv run python -m eval.report` turns the newest `eval/results/<timestamp>.json`
+into `docs/eval-report.md` (tables only, every number recomputed from the
+results file). Time extraction is
 scored on what would actually be scheduled, after the deterministic
 timezone check in `app/services/event_time.py`: the start must match in
 both instant and UTC offset, and a clarification item passes only if no
 timed event would be created.
 
 **Results** (`eval/results/20261025T193701Z.json`, `gpt-4o`,
-`analyze_v2`):
+`analyze_v2`, the 60 `base` items, run before the hard suite and the split
+were added):
 
 | Metric | Result |
 |---|---|

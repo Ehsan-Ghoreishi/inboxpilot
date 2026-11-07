@@ -2,10 +2,13 @@
 
 Usage:
     uv run python -m eval.run --prompt-version analyze_v1 \\
-        [--model gpt-...] \\
+        [--split dev|test|all] [--model gpt-...] \\
         [--input-usd-per-mtok X --output-usd-per-mtok Y]
 
-Makes one real OpenAI call per dataset item (needs a configured `.env`).
+Makes one real OpenAI call per selected dataset item (needs a configured
+`.env`). The dataset is split into dev and test with a fixed seed
+(`assign_splits`); only dev may be used for prompt tuning, so the default
+is `--split dev`. Run `--split test` to report a final number.
 Writes `eval/results/<UTC timestamp>.json` and prints a summary report.
 Cost is only estimated when both prices are passed: they change over
 time and differ per model, so none are hardcoded here.
@@ -14,9 +17,12 @@ time and differ per model, so none are hardcoded here.
 import argparse
 import hashlib
 import json
+import random
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
@@ -26,7 +32,13 @@ from app.agents.email_analyzer import (
     analyze_with_metadata,
     available_prompt_versions,
 )
-from app.integrations.langfuse import shutdown_tracing
+from app.integrations.langfuse import (
+    annotate,
+    run_flags,
+    score_trace,
+    shutdown_tracing,
+    traced,
+)
 from app.schemas.email import Email, EmailAnalysis, EmailCategory, EmailParticipant
 from app.services.event_time import resolve_timing
 from eval.metrics import (
@@ -35,8 +47,10 @@ from eval.metrics import (
     accuracy,
     calibration_table,
     confusion_matrix,
+    critical_recall,
     per_class_metrics,
     slice_accuracy,
+    tag_accuracy,
     time_extraction_summary,
     usage_summary,
 )
@@ -52,6 +66,13 @@ RECEIVED_AT = datetime(2026, 3, 2, 9, 0, tzinfo=timezone.utc)
 
 Analyzer = Callable[[Email], AnalysisRun]
 
+# Seed and share for the dev/test split. Changing either (or the dataset's
+# items) re-draws the split, so the test items would no longer be unseen.
+SPLIT_SEED = 20260302
+TEST_FRACTION = 0.5
+SPLITS = ("dev", "test")
+EVAL_TAGS = ("eval",)
+
 
 class EvalItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -61,6 +82,13 @@ class EvalItem(BaseModel):
     body: str
     sender: EmailParticipant
     label: EmailCategory
+    # Slicing tags. `suite` separates the original corpus (which the
+    # retrieval and ask evals also use) from the hard classification set.
+    language: Literal["en", "de", "mixed"] | None = None
+    difficulty: Literal["easy", "medium", "hard"] | None = None
+    suite: Literal["base", "hard"] = "base"
+    # Why the label is what it is, for items where it is a judgment call.
+    note: str | None = None
     # Time labels; `expected_needs_clarification` is `None` on items
     # that aren't scored for time extraction.
     expected_start_time: AwareDatetime | None = None
@@ -68,9 +96,36 @@ class EvalItem(BaseModel):
     expected_needs_clarification: bool | None = None
 
 
-def load_dataset(path: Path) -> list[EvalItem]:
+def load_dataset(path: Path, suite: str | None = None) -> list[EvalItem]:
+    """All items, or only those of one `suite`."""
     with path.open(encoding="utf-8") as f:
-        return [EvalItem.model_validate_json(line) for line in f if line.strip()]
+        items = [EvalItem.model_validate_json(line) for line in f if line.strip()]
+    return [i for i in items if suite is None or i.suite == suite]
+
+
+def assign_splits(items: Sequence[EvalItem]) -> dict[str, str]:
+    """`{item id: "dev" | "test"}`, stratified by label and fixed by
+    `SPLIT_SEED`, so every class appears on both sides and the split is
+    the same on every run and machine."""
+    by_label: dict[str, list[str]] = defaultdict(list)
+    for item in items:
+        by_label[item.label.value].append(item.id)
+    rng = random.Random(SPLIT_SEED)
+    splits: dict[str, str] = {}
+    for label in sorted(by_label):
+        ids = sorted(by_label[label])
+        rng.shuffle(ids)
+        n_test = round(len(ids) * TEST_FRACTION)
+        for i, item_id in enumerate(ids):
+            splits[item_id] = "test" if i < n_test else "dev"
+    return splits
+
+
+def select_split(items: Sequence[EvalItem], split: str) -> list[EvalItem]:
+    if split == "all":
+        return list(items)
+    splits = assign_splits(items)
+    return [i for i in items if splits[i.id] == split]
 
 
 def to_email(item: EvalItem) -> Email:
@@ -116,9 +171,38 @@ def duration_correct(item: EvalItem, analysis: EmailAnalysis | None) -> bool | N
     return resolve_timing(analysis).duration_minutes == item.expected_duration_minutes
 
 
-def evaluate_item(item: EvalItem, analyzer: Analyzer) -> ItemResult:
+def evaluate_item(item: EvalItem, analyzer: Analyzer, split: str | None = None) -> ItemResult:
     """One item; a failed analysis is recorded as an error, not raised,
     so one bad call doesn't lose the rest of the run."""
+    result = _analyze_item(item, analyzer)
+    result.language, result.difficulty, result.split = item.language, item.difficulty, split
+    return result
+
+
+@traced("eval_item", root=True, tags=EVAL_TAGS)
+def evaluate_item_traced(item: EvalItem, analyzer: Analyzer, split: str | None) -> ItemResult:
+    """`evaluate_item` as its own Langfuse trace, scored `correct`.
+
+    Only labels and tags are attached, never the email's text; what the
+    model call itself records is redacted by the tracing client unless
+    TRACE_EMAIL_CONTENT is on in test mode (app/integrations/langfuse).
+    """
+    result = evaluate_item(item, analyzer, split)
+    annotate(
+        item_id=item.id,
+        label=result.label,
+        predicted=result.predicted,
+        language=item.language,
+        difficulty=item.difficulty,
+        split=split,
+        errored=result.error is not None,
+        **run_flags(),
+    )
+    score_trace("correct", result.correct)
+    return result
+
+
+def _analyze_item(item: EvalItem, analyzer: Analyzer) -> ItemResult:
     try:
         run = analyzer(to_email(item))
     except Exception as exc:  # noqa: BLE001 - recorded per item
@@ -164,6 +248,9 @@ def summarize(
         "confusion_matrix": matrix,
         "calibration": calibration_table(results),
         "slices": slice_accuracy(results),
+        "slices_language": tag_accuracy(results, "language"),
+        "slices_difficulty": tag_accuracy(results, "difficulty"),
+        "critical_recall": critical_recall(matrix),
         "usage": usage_summary(results, input_usd_per_mtok, output_usd_per_mtok),
     }
 
@@ -205,9 +292,24 @@ def format_report(run_info: dict, summary: dict) -> str:
             f"{_fmt(b['accuracy']):>10}"
         )
 
-    lines += ["", "slices: " + "  ".join(
-        f"{tag}={s['accuracy']:.2f} (n={s['n']})" for tag, s in summary["slices"].items()
-    )]
+    for title, key in (
+        ("slices", "slices"),
+        ("by language", "slices_language"),
+        ("by difficulty", "slices_difficulty"),
+    ):
+        if summary.get(key):
+            lines += ["", f"{title}: " + "  ".join(
+                f"{tag}={s['accuracy']:.2f} (n={s['n']})"
+                for tag, s in summary[key].items()
+            )]
+
+    lines += ["", "recall of the costly classes (a miss means a missed interview or deadline)"]
+    for label, m in summary["critical_recall"].items():
+        missed_as = ", ".join(f"{k}={v}" for k, v in m["missed_as"].items()) or "-"
+        lines.append(
+            f"{label:<22}recall={_fmt(m['recall'])}  missed={m['missed']}/{m['support']}"
+            f"  missed as: {missed_as}"
+        )
 
     usage = summary["usage"]
     cost = usage["estimated_cost_usd_per_email"]
@@ -232,6 +334,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help=f"system prompt file under app/agents/prompts/ (default: {PROMPT_VERSION})",
     )
     parser.add_argument("--model", help="override settings.openai_model")
+    parser.add_argument(
+        "--split",
+        choices=[*SPLITS, "all"],
+        default="dev",
+        help="which part of the dataset to run; tune prompts on dev only (default: dev)",
+    )
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--input-usd-per-mtok", type=float, help="USD per 1M input tokens")
@@ -242,11 +350,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 def run(args: argparse.Namespace, analyzer: Analyzer) -> tuple[Path, str]:
     """Evaluate every item, write the results file, and return its path
     and the printable report."""
-    items = load_dataset(args.dataset)
+    items = select_split(load_dataset(args.dataset), args.split)
     started = datetime.now(timezone.utc)
     results = []
     for i, item in enumerate(items, 1):
-        result = evaluate_item(item, analyzer)
+        result = evaluate_item_traced(item, analyzer, args.split)
         mark = "ok " if result.correct else ("ERR" if result.error else "x  ")
         print(f"[{i:>2}/{len(items)}] {mark} {item.id}", flush=True)
         results.append(result)
@@ -258,6 +366,9 @@ def run(args: argparse.Namespace, analyzer: Analyzer) -> tuple[Path, str]:
         "model": ", ".join(models) or args.model or "(no successful calls)",
         "dataset": str(args.dataset),
         "dataset_sha256": hashlib.sha256(args.dataset.read_bytes()).hexdigest(),
+        "split": args.split,
+        "split_seed": SPLIT_SEED,
+        "test_fraction": TEST_FRACTION,
         "received_at": RECEIVED_AT.isoformat(),
         "prices_usd_per_mtok": {
             "input": args.input_usd_per_mtok,
