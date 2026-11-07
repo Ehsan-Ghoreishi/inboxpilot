@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from app.config import get_settings
 from app.database.repository import save_raw_event
 from app.database.session import session_scope
+from app.integrations.langfuse import flush_tracing
 from app.integrations.nylas.webhooks import store_raw_event, verify_webhook_signature
 from app.workflows.background import run_triage_safely
 
@@ -69,6 +70,10 @@ async def _process_inline(event_id: str, event: dict) -> str:
         outcome = await asyncio.wait_for(work, timeout=timeout)
     except TimeoutError:
         return "timeout"
+    finally:
+        # Cloud Run throttles CPU once the response is sent: send the
+        # trace now (bounded, outside the triage budget).
+        await run_in_threadpool(flush_tracing)
     return outcome.value if outcome is not None else "error"
 
 

@@ -22,9 +22,14 @@ import time
 from app.config import get_settings
 from app.database.repository import get_email_by_message_id
 from app.database.session import session_scope
+from app.integrations.langfuse import annotate, run_flags, traced
 from app.integrations.nylas.mapper import nylas_payload_to_email
 from app.services.embedding import embed_email, get_embedder
-from app.workflows.triage_workflow import TriageOutcome, process_raw_event
+from app.workflows.triage_workflow import (
+    TriageOutcome,
+    is_message_event,
+    process_raw_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +45,27 @@ def _past(deadline: float | None) -> bool:
 def run_triage_safely(
     event_id: str, payload: dict, deadline: float | None = None
 ) -> TriageOutcome | None:
-    """Process one raw event in its own transaction. Returns `None` on error."""
+    """Process one raw event in its own transaction. Returns `None` on error.
+
+    Each `message.*` event is recorded as one `email` trace; other event
+    types are skipped without one.
+    """
+    process = _process_email_event if is_message_event(payload) else _process_event
+    return process(event_id, payload, deadline)
+
+
+@traced("email", root=True)
+def _process_email_event(
+    event_id: str, payload: dict, deadline: float | None
+) -> TriageOutcome | None:
+    outcome = _process_event(event_id, payload, deadline)
+    annotate(event_id=event_id, outcome=outcome.value if outcome else "error")
+    return outcome
+
+
+def _process_event(
+    event_id: str, payload: dict, deadline: float | None
+) -> TriageOutcome | None:
     try:
         if _past(deadline):
             raise DeadlineExceeded
@@ -68,15 +93,20 @@ def run_triage_safely(
     return outcome
 
 
+@traced("embed")
 def embed_event_email_safely(event_id: str, payload: dict) -> None:
     """Embed the already-saved email of this event in its own transaction."""
     try:
         message_id = nylas_payload_to_email(payload).id
+        embedder = get_embedder()
+        embedded = False
         with session_scope() as session:
             email = get_email_by_message_id(session, message_id)
             if email is not None:
-                embed_email(session, email, get_embedder())
+                embedded = embed_email(session, email, embedder)
+        annotate(embedded=embedded, model=embedder.model, **run_flags())
     except Exception as exc:  # noqa: BLE001 - must never propagate
+        annotate(outcome="embedding_error", error_type=type(exc).__name__)
         logger.error(
             "Embedding failed for event_id=%s: %s",
             event_id,

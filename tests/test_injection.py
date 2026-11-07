@@ -53,6 +53,11 @@ SETTINGS = Settings(
     app_api_key="app-test",
     processing_mode="live",
     confidence_threshold=0.7,
+    # `_isolated_env` copies these into the environment: without this a
+    # developer's .env keys would switch tracing on for the whole module.
+    langfuse_tracing_enabled=False,
+    langfuse_public_key=None,
+    langfuse_secret_key=None,
 )
 
 

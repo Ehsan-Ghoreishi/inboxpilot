@@ -10,7 +10,7 @@ instructions found inside one.
 from functools import lru_cache
 from pathlib import Path
 
-from openai import OpenAI
+from langfuse.openai import OpenAI
 
 from app.agents.untrusted import quote, single_line
 from app.config import get_settings
@@ -59,6 +59,7 @@ def answer_question(question: str, emails: list[ContextEmail]) -> AskResult:
     them against `len(emails)`.
     """
     response = _get_client().responses.parse(
+        name="answer_llm",
         model=get_settings().openai_model,
         instructions=_load_system_prompt(),
         input=[{"role": "user", "content": format_prompt_input(question, emails)}],

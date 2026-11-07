@@ -189,3 +189,61 @@ def test_out_of_range_db_pool_settings_are_rejected(monkeypatch, name, value):
         get_settings()
 
     assert name in str(exc_info.value)
+
+
+def test_langfuse_settings_are_optional_and_tracing_defaults_on(monkeypatch):
+    _set_required_env(monkeypatch)
+    # The suite pins this off for every test; check the real default.
+    monkeypatch.delenv("LANGFUSE_TRACING_ENABLED")
+
+    settings = get_settings()
+
+    assert settings.langfuse_public_key is None
+    assert settings.langfuse_secret_key is None
+    assert settings.langfuse_base_url is None
+    assert settings.langfuse_tracing_enabled is True
+    assert settings.trace_email_content is False
+
+
+def test_langfuse_settings_load_from_the_environment(monkeypatch):
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://localhost:3000")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "false")
+    monkeypatch.setenv("TRACE_EMAIL_CONTENT", "true")
+
+    settings = get_settings()
+
+    assert settings.langfuse_public_key == "pk-test"
+    assert settings.langfuse_secret_key.get_secret_value() == "sk-test"
+    assert settings.langfuse_base_url == "http://localhost:3000"
+    assert settings.langfuse_tracing_enabled is False
+    assert settings.trace_email_content is True
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_langfuse_values_in_the_environment_mean_unset(monkeypatch, blank):
+    _set_required_env(monkeypatch)
+    for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL"):
+        monkeypatch.setenv(name, blank)
+
+    settings = get_settings()
+
+    assert settings.langfuse_public_key is None
+    assert settings.langfuse_secret_key is None
+    assert settings.langfuse_base_url is None
+
+
+def test_langfuse_secret_key_never_appears_in_repr_or_str(monkeypatch):
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-very-secret-value")
+
+    settings = get_settings()
+
+    assert settings.langfuse_secret_key.get_secret_value() == "sk-lf-very-secret-value"
+    for rendered in (repr(settings), str(settings), repr(settings.langfuse_secret_key)):
+        assert "very-secret-value" not in rendered
+        assert "sk-lf" not in rendered
+    assert "very-secret-value" not in str(settings.model_dump())
+    assert "very-secret-value" not in settings.model_dump_json()

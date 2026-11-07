@@ -46,7 +46,7 @@ flowchart LR
 | Layer | Path | Responsibility |
 |---|---|---|
 | API | `app/api/` | Webhook (`/events`), approval API (`/actions`), semantic search (`/search`), question answering (`/ask`), dashboard (`/`) |
-| Integrations | `app/integrations/nylas/` | Signature check, SDK client, payload → `Email` mapper, actions |
+| Integrations | `app/integrations/nylas/`, `app/integrations/langfuse/` | Nylas: signature check, SDK client, payload → `Email` mapper, actions. Langfuse: tracing client, step helpers, email redaction |
 | Schemas | `app/schemas/` | Canonical `Email` / `EmailAnalysis`, API responses |
 | Agents | `app/agents/` | LLM classification/extraction; versioned prompts |
 | Workflows | `app/workflows/` | `process_email()`: filter → classify → route → propose |
@@ -230,6 +230,11 @@ All names are fields of `app/config.py`.
 | `DB_POOL_SIZE` | Connections kept per process (default 5) | Plain |
 | `DB_MAX_OVERFLOW` | Extra connections per process above the pool (default 0) | Plain |
 | `RAG_MIN_SCORE` | Minimum cosine similarity for `/search` and `/ask` (default 0.30) | Plain |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse project key; tracing needs both keys (optional) | Plain |
+| `LANGFUSE_SECRET_KEY` | Langfuse project secret (optional) | Secret |
+| `LANGFUSE_BASE_URL` | Langfuse host; default Langfuse Cloud (EU) (optional) | Plain |
+| `LANGFUSE_TRACING_ENABLED` | `false` turns tracing off even with keys set (default `true`) | Plain |
+| `TRACE_EMAIL_CONTENT` | `true` sends email text to Langfuse, only with `PROCESSING_MODE=test` (default `false`) | Plain |
 
 `app/config.py` also requires `OPENAI_MODEL`, `NYLAS_API_KEY`,
 `NYLAS_CLIENT_ID`, `NYLAS_GRANT_ID` and `SERVER_URL`; the app refuses to
@@ -733,6 +738,68 @@ flag does the rest; the ask eval above measures that combination.
 - **No real-mailbox testing.** All numbers come from the synthetic
   corpus loaded directly into the database; neither eval has been run
   against a real Nylas mailbox.
+
+## Observability
+
+InboxPilot sends traces to [Langfuse](https://langfuse.com) so each
+email and each question can be inspected step by step: what decided,
+what it cost, how long it took. It is optional: without keys, or with
+`LANGFUSE_TRACING_ENABLED=false`, the app starts and behaves exactly as
+before, and no Langfuse client is created that could export anything.
+
+**Traces**
+
+| Trace | Steps (metadata) |
+|---|---|
+| `email`, one per processed `message.*` event | `triage` (`decided_by=sender_filter`, `decision`), `classify` (`decided_by=llm`, `category`, `confidence`, `model`, `prompt_version`) with the `classify_llm` generation inside it, `propose_action` (`decided_by=confidence_threshold` or `category_table`, `category`, `confidence`, `status`, `proposed`, `pending_action_id`), `embed` (`embedded`, `model`). Each step also carries `processing_mode` and `dry_run`; the trace carries `event_id` and `outcome`. |
+| `ask`, one per `/ask` call | `retrieve` (`top_k`, `scores`, `threshold`) and the `answer_llm` generation. The trace carries `answerable`, `citations_valid` and, for a refusal, `refusal`. |
+
+Model, token counts and cost come from the OpenAI client, created from
+`langfuse.openai`, which records `responses.parse` calls (checked with a
+real trace, including cost). Embedding calls appear as generations
+inside the `embed` and `retrieve` steps. Events that are not messages
+produce no trace. Eval runs produce standalone `classify_llm`, `answer_llm`
+and embedding traces.
+
+`answerable` and `citations_valid` are on the `ask` trace rather than on
+`retrieve`: a span cannot be changed after it ends, and both are only
+known once the model has answered.
+
+**Privacy.** Function arguments and return values are never captured
+(`capture_input=False`, `capture_output=False`); what a step knows is
+attached explicitly as metadata, and it contains no email text. The one
+place email content appears is the model and embedding calls the OpenAI
+wrapper records. Email text and addresses are sent to Langfuse only when
+`TRACE_EMAIL_CONTENT=true` **and** `PROCESSING_MODE=test`; startup logs
+which mode is in effect and warns when the flag is set but ignored. In
+every other case the client's `mask_otel_spans` hook
+(`app/integrations/langfuse/masking.py`) rewrites each span before export:
+
+- email addresses become `[email]` everywhere;
+- an `<untrusted_email>` block in a prompt keeps only its opening tag and
+  the length of its body (sender, recipients and subject are dropped);
+- an embedding call's input becomes the length of each text;
+- a model call's output becomes its length;
+- status messages (exception text) become `[redacted]`.
+
+Model name, token usage, cost, latency and step metadata are untouched.
+A span that cannot be redacted loses its content attributes instead of
+being exported as it is. After changing a prompt's layout, check that
+`tests/test_trace_masking.py` still passes: the redaction relies on the
+`<untrusted_email>` delimiter lines.
+
+**Runtime.** Langfuse sends spans in the background. The webhook with
+`PROCESS_EVENTS_INLINE=true` and `/ask` call `flush()` before returning
+(waiting at most 2 seconds, so an unreachable Langfuse cannot hold up a
+webhook), because Cloud Run throttles CPU once the response is sent.
+`scripts/reprocess_raw_events.py`, `scripts/embed_emails.py` and the eval
+scripts call `shutdown()` before exiting. Tests run with tracing off and
+cannot build a client that exports (`tests/conftest.py`).
+
+**Setup.** Create a project in Langfuse, then set `LANGFUSE_PUBLIC_KEY`
+and `LANGFUSE_SECRET_KEY` (and `LANGFUSE_BASE_URL` for the US region,
+`https://us.cloud.langfuse.com`, or a self-hosted instance). On Cloud
+Run, keep the secret key in Secret Manager like the other secrets.
 
 ## Limitations
 

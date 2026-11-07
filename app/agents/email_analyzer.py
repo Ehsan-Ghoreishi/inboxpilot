@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from openai import OpenAI
+from langfuse.openai import OpenAI
 
 from app.agents.untrusted import (
     quote as _quote,
@@ -97,6 +97,7 @@ def analyze_with_metadata(
 
     started = time.perf_counter()
     response = client.responses.parse(
+        name="classify_llm",
         model=model,
         instructions=instructions,
         input=[{"role": "user", "content": _format_email_for_prompt(email)}],

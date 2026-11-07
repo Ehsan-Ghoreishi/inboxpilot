@@ -7,7 +7,7 @@ variables / secrets. Everything else should depend on `get_settings()`.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -74,6 +74,36 @@ class Settings(BaseSettings):
     # well below that.
     db_pool_size: int = Field(default=5, ge=1)
     db_max_overflow: int = Field(default=0, ge=0)
+    # Langfuse tracing (see app/integrations/langfuse). Tracing is active
+    # only with both keys set and the flag on; without them the app runs
+    # exactly as before. The SDK also reads LANGFUSE_TRACING_ENABLED
+    # itself, so `false` here can't be overridden by a stray shell export.
+    langfuse_public_key: str | None = None
+    # SecretStr: never shown in repr/str/logs/pytest output; read with
+    # get_secret_value() only where the client is built.
+    langfuse_secret_key: SecretStr | None = None
+    # Defaults to Langfuse Cloud (EU) when unset.
+    langfuse_base_url: str | None = None
+    langfuse_tracing_enabled: bool = True
+    # Email text and addresses are sent to Langfuse only when this is true
+    # AND processing_mode is "test"; otherwise traces carry redacted text
+    # (see app/integrations/langfuse/masking.py).
+    trace_email_content: bool = False
+
+    @field_validator("langfuse_public_key", "langfuse_base_url")
+    @classmethod
+    def _blank_is_unset(cls, value: str | None) -> str | None:
+        # `LANGFUSE_PUBLIC_KEY=` in a .env file means "not configured".
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @field_validator("langfuse_secret_key", mode="before")
+    @classmethod
+    def _blank_secret_is_unset(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("webhook_secret", "app_api_key")
     @classmethod

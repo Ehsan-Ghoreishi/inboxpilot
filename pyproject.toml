@@ -21,6 +21,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "pgvector>=0.5.1",
     "tzdata>=2026.5",
+    "langfuse>=5.2",
 ]
 
 [dependency-groups]
@@ -34,3 +35,7 @@ package = false
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# Short tracebacks list no function arguments or locals, which could hold
+# credentials (a failing client constructor once printed its keyword
+# arguments).
+addopts = "--tb=short"

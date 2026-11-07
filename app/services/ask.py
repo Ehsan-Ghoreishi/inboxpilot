@@ -12,6 +12,7 @@ import logging
 
 from app.agents.email_qa import answer_question
 from app.database.session import session_scope
+from app.integrations.langfuse import annotate, score_trace, traced
 from app.schemas.ask import AskRequest, AskResponse, AskResult, ContextEmail
 from app.schemas.search import SearchResult
 from app.services.embedding import Embedder
@@ -25,12 +26,19 @@ INVALID_ANSWER = "Could not produce a verifiable answer from stored emails."
 MAX_ATTEMPTS = 2
 
 
+@traced("retrieve")
 def _retrieve_context(
     request: AskRequest, embedder: Embedder, min_score: float
 ) -> list[tuple[ContextEmail, SearchResult]]:
     with session_scope() as session:
         matches = retrieve_emails(
             session, request.to_search_request(), embedder, min_score
+        )
+        annotate(
+            decided_by="similarity_threshold",
+            top_k=request.top_k,
+            scores=[round(score, 4) for _, score in matches],
+            threshold=min_score,
         )
         return [
             (
@@ -45,6 +53,14 @@ def _retrieve_context(
             )
             for email, score in matches
         ]
+
+
+def _record_outcome(answerable: bool, citations_valid: bool | None = None) -> None:
+    """On the ask trace, as metadata and as BOOLEAN scores (filterable)."""
+    annotate(answerable=answerable, citations_valid=citations_valid)
+    score_trace("answerable", answerable)
+    if citations_valid is not None:
+        score_trace("citations_valid", citations_valid)
 
 
 def _refusal(answer: str) -> AskResponse:
@@ -77,6 +93,7 @@ def _attempt_answer(question: str, emails: list[ContextEmail]) -> AskResult | No
     return None
 
 
+@traced("ask", root=True)
 def ask_question(
     request: AskRequest,
     embedder: Embedder,
@@ -86,11 +103,16 @@ def ask_question(
     # never holds a database connection.
     context = _retrieve_context(request, embedder, min_score)
     if not context:
+        annotate(refusal="insufficient_evidence")
+        _record_outcome(answerable=False)
         return _refusal(INSUFFICIENT_EVIDENCE_ANSWER)
 
     result = _attempt_answer(request.question, [email for email, _ in context])
     if result is None:
+        annotate(refusal="invalid_answer")
+        _record_outcome(answerable=False, citations_valid=False)
         return _refusal(INVALID_ANSWER)
+    _record_outcome(answerable=result.answerable, citations_valid=True)
 
     # Citation numbers are 1-based positions in `context`; dedupe, keep order.
     cited = [context[number - 1] for number in dict.fromkeys(result.citations)]

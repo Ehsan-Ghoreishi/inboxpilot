@@ -26,6 +26,7 @@ from app.agents.email_analyzer import (
     analyze_with_metadata,
     available_prompt_versions,
 )
+from app.integrations.langfuse import shutdown_tracing
 from app.schemas.email import Email, EmailAnalysis, EmailCategory, EmailParticipant
 from app.services.event_time import resolve_timing
 from eval.metrics import (
@@ -292,7 +293,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             email, prompt_version=args.prompt_version, model=args.model
         )
 
-    out_path, report = run(args, analyzer)
+    try:
+        out_path, report = run(args, analyzer)
+    finally:
+        shutdown_tracing()
     print()
     print(report)
     print(f"\nresults written to {out_path}")
