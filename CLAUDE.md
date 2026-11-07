@@ -71,3 +71,4 @@ docs/
 - Keep PROCESSING_MODE=test and DRY_RUN=true as cloud defaults.
 - Every new environment variable goes into Settings, .env.example and the README config table.
 - Every behavior change gets tests. Finish with `uv run pytest -q` and `git diff --stat`.
+- Tests must not depend on ambient environment values (DRY_RUN, PROCESSING_MODE, etc.); pin them explicitly, and the suite must pass with both DRY_RUN=false and DRY_RUN=true.

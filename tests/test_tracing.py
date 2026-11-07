@@ -398,6 +398,8 @@ def pipeline(monkeypatch):
     def wire(settings, run: AnalysisRun | None = None) -> None:
         run = run or _run()
         monkeypatch.setattr("app.workflows.background.get_settings", lambda: settings)
+        # Step metadata (`run_flags`) reads the process settings itself.
+        monkeypatch.setattr(tracing, "get_settings", lambda: settings)
         monkeypatch.setattr("app.workflows.background.session_scope", nullcontext)
         monkeypatch.setattr(
             "app.workflows.triage_workflow.insert_email_if_new",
