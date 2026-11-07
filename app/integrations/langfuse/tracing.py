@@ -20,7 +20,7 @@ and never from whatever `LANGFUSE_*` variables happen to be exported:
 import functools
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
 from langfuse import Langfuse, observe, propagate_attributes
@@ -96,11 +96,14 @@ def _active_client() -> Langfuse | None:
     return _client if _active else None
 
 
-def traced(name: str, *, root: bool = False) -> Callable[[F], F]:
+def traced(
+    name: str, *, root: bool = False, tags: Sequence[str] | None = None
+) -> Callable[[F], F]:
     """Record each call of the decorated function as a Langfuse observation.
 
     Arguments and return value are never captured: what a step knows is
-    attached explicitly with `annotate`. `root=True` also names the trace.
+    attached explicitly with `annotate`. `root=True` also names the trace
+    and applies `tags` to it.
     With tracing off the function is called directly.
     """
 
@@ -112,7 +115,7 @@ def traced(name: str, *, root: bool = False) -> Callable[[F], F]:
             if not init_tracing():
                 return func(*args, **kwargs)
             if root:
-                with propagate_attributes(trace_name=name):
+                with propagate_attributes(trace_name=name, tags=list(tags) if tags else None):
                     return observed(*args, **kwargs)
             return observed(*args, **kwargs)
 

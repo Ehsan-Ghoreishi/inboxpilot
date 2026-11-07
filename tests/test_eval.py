@@ -16,25 +16,63 @@ from app.agents.email_analyzer import (
 from app.config import get_settings
 from app.schemas.email import Email, EmailAnalysis, EmailCategory, SuggestedAction, Urgency
 from eval.metrics import (
+    CRITICAL_LABELS,
     ItemResult,
     accuracy,
     calibration_table,
     confusion_matrix,
+    critical_recall,
     per_class_metrics,
     slice_accuracy,
+    tag_accuracy,
     time_extraction_summary,
     usage_summary,
 )
 from eval.run import (
     DEFAULT_DATASET,
     LABELS,
+    SPLIT_SEED,
+    EvalItem,
     _parse_args,
+    assign_splits,
     duration_correct,
+    evaluate_item_traced,
     load_dataset,
     run,
+    select_split,
     time_correct,
     to_email,
 )
+from tests.conftest import attribute
+
+# --- environment ---------------------------------------------------------------
+
+_PINNED_ENV = {
+    "OPENAI_API_KEY": "sk-test",
+    "OPENAI_MODEL": "gpt-test-model",
+    "NYLAS_API_KEY": "nylas-test",
+    "NYLAS_CLIENT_ID": "client-test",
+    "NYLAS_GRANT_ID": "grant-test",
+    "WEBHOOK_SECRET": "super-secret",
+    "SERVER_URL": "http://localhost:8000",
+    "DATABASE_URL": "postgresql://user:pass@localhost/db",
+    "APP_API_KEY": "app-test",
+    "PROCESSING_MODE": "manual",
+    "DRY_RUN": "false",
+    "TRACE_EMAIL_CONTENT": "false",
+}
+
+
+@pytest.fixture(autouse=True)
+def pinned_env(tmp_path, monkeypatch):
+    """Settings come from here, never from the developer's shell or .env
+    (the run reads them for trace metadata)."""
+    monkeypatch.chdir(tmp_path)
+    for key, value in _PINNED_ENV.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 # --- dataset -------------------------------------------------------------------
 
@@ -44,9 +82,10 @@ def dataset():
     return load_dataset(DEFAULT_DATASET)
 
 
-def test_dataset_has_50_category_items_balanced_plus_10_time_items(dataset):
-    category_items = [i for i in dataset if i.expected_needs_clarification is None]
-    time_items = [i for i in dataset if i.expected_needs_clarification is not None]
+def test_base_suite_has_50_category_items_balanced_plus_10_time_items(dataset):
+    base = [i for i in dataset if i.suite == "base"]
+    category_items = [i for i in base if i.expected_needs_clarification is None]
+    time_items = [i for i in base if i.expected_needs_clarification is not None]
     assert len(category_items) == 50
     assert Counter(i.label for i in category_items) == {c: 10 for c in EmailCategory}
     assert len(time_items) == 10
@@ -54,6 +93,7 @@ def test_dataset_has_50_category_items_balanced_plus_10_time_items(dataset):
 
 def test_time_items_are_labeled_consistently(dataset):
     time_items = [i for i in dataset if i.expected_needs_clarification is not None]
+    assert all(i.suite == "base" for i in time_items)
     for item in time_items:
         if item.expected_needs_clarification:
             assert item.expected_start_time is None, item.id
@@ -87,6 +127,36 @@ def test_dataset_is_synthetic_only(dataset):
     item can point at a real mailbox."""
     for item in dataset:
         assert item.sender.email.endswith(".example"), item.id
+
+
+def test_every_item_is_tagged_for_slicing(dataset):
+    for item in dataset:
+        assert item.language is not None, item.id
+        assert item.difficulty is not None, item.id
+
+
+def test_hard_suite_covers_the_required_cases(dataset):
+    hard = [i for i in dataset if i.suite == "hard"]
+    assert len(hard) >= 40
+    assert {i.label for i in hard} == set(EmailCategory)
+    languages = Counter(i.language for i in hard)
+    assert languages["de"] >= 8
+    assert languages["mixed"] >= 4
+    assert languages["en"] >= 8
+    assert {i.difficulty for i in hard} <= {"medium", "hard"}
+    text = " ".join(f"{i.subject} {i.body} {i.note}".lower() for i in hard)
+    for marker in ("fwd:", "wg:", "keep your cv on file", "bewerbung", "newsletter",
+                   "within 72 hours", "innerhalb von 5 werktagen", "earn $400"):
+        assert marker in text, marker
+
+
+def test_hard_suite_labels_follow_the_documented_conventions(dataset):
+    by_note = {i.note: i for i in dataset if i.suite == "hard"}
+    assert by_note["automated application-received confirmation"].label == EmailCategory.OTHER
+    assert (
+        by_note["soft rejection: keep CV on file"].label == EmailCategory.REJECTION
+    )
+    assert all(i.note for i in dataset if i.suite == "hard")
 
 
 def test_every_item_converts_to_a_canonical_email(dataset):
@@ -292,6 +362,7 @@ def _fake_analyzer(email: Email) -> AnalysisRun:
 def test_run_writes_results_and_reports_all_sections(tmp_path, capsys):
     args = _parse_args(
         [
+            "--split", "all",
             "--results-dir", str(tmp_path),
             "--input-usd-per-mtok", "1",
             "--output-usd-per-mtok", "4",
@@ -304,9 +375,11 @@ def test_run_writes_results_and_reports_all_sections(tmp_path, capsys):
     assert out_path.parent == tmp_path
     assert data["run"]["prompt_version"] == "analyze_v2"
     assert data["run"]["model"] == "fake-model"
-    assert len(data["items"]) == 60
+    everything = load_dataset(DEFAULT_DATASET)
+    assert len(data["items"]) == len(everything)
     assert data["summary"]["errors"] == 1
-    assert data["summary"]["accuracy"] == pytest.approx(10 / 60)
+    others = sum(i.label == EmailCategory.OTHER for i in everything)
+    assert data["summary"]["accuracy"] == pytest.approx(others / len(everything))
     # The fake extracts no times and never asks for clarification.
     assert data["summary"]["time_extraction"] == {
         "n": 10,
@@ -321,6 +394,10 @@ def test_run_writes_results_and_reports_all_sections(tmp_path, capsys):
         "confusion matrix",
         "0.7-0.9",
         "mean latency",
+        "by language:",
+        "by difficulty:",
+        "recall of the costly classes",
+        "interview_invite  ",
     ):
         assert section in report
     assert "$0.000700" in report  # (500 * 1 + 50 * 4) / 1e6
@@ -378,3 +455,205 @@ def test_analyze_with_metadata_reports_usage_and_model(_env, dataset):
     assert (result.input_tokens, result.output_tokens) == (812, 95)
     assert result.latency_ms >= 0
     assert client.responses.parse.call_args.kwargs["model"] == "override-model"
+
+
+# --- split ---------------------------------------------------------------------
+
+
+def test_split_is_disjoint_complete_and_stratified(dataset):
+    splits = assign_splits(dataset)
+    dev, test = select_split(dataset, "dev"), select_split(dataset, "test")
+
+    assert set(splits) == {i.id for i in dataset}
+    assert {i.id for i in dev}.isdisjoint(i.id for i in test)
+    assert len(dev) + len(test) == len(dataset)
+    for label in EmailCategory:
+        assert any(i.label == label for i in dev), label
+        assert any(i.label == label for i in test), label
+    assert abs(len(dev) - len(test)) <= len(EmailCategory)
+    assert len(select_split(dataset, "all")) == len(dataset)
+
+
+def test_split_is_fixed_by_the_seed_not_by_input_order_or_environment(dataset, monkeypatch):
+    expected = assign_splits(dataset)
+
+    assert assign_splits(list(reversed(dataset))) == expected
+    monkeypatch.setenv("PYTHONHASHSEED", "1")
+    assert assign_splits(dataset) == expected
+    monkeypatch.setattr("eval.run.SPLIT_SEED", SPLIT_SEED + 1)
+    assert assign_splits(dataset) != expected
+
+
+def test_split_leaves_the_hard_items_on_both_sides(dataset):
+    hard = [i for i in dataset if i.suite == "hard"]
+    sides = Counter(assign_splits(dataset)[i.id] for i in hard)
+    assert sides["dev"] >= 10 and sides["test"] >= 10
+
+
+# --- new metrics ---------------------------------------------------------------
+
+
+def test_tag_accuracy_skips_untagged_items():
+    results = [
+        _r("a", "other", "other").model_copy(update={"language": "de"}),
+        _r("b", "other", "rejection").model_copy(update={"language": "de"}),
+        _r("c", "other", "other").model_copy(update={"language": "en"}),
+        _r("d", "other", "other"),
+    ]
+
+    assert tag_accuracy(results, "language") == {
+        "de": {"n": 2, "accuracy": 0.5},
+        "en": {"n": 1, "accuracy": 1.0},
+    }
+    assert tag_accuracy(results, "difficulty") == {}
+
+
+def test_critical_recall_reports_misses_and_what_they_became():
+    results = [
+        _r("i-1", "interview_invite", "interview_invite"),
+        _r("i-2", "interview_invite", "other"),
+        _r("i-3", "interview_invite", "recruiter_outreach"),
+        _r("i-4", "interview_invite", None),
+        _r("a-1", "assessment_deadline", "assessment_deadline"),
+        _r("o-1", "other", "interview_invite"),
+    ]
+
+    crit = critical_recall(confusion_matrix(results, LABELS))
+
+    assert tuple(crit) == CRITICAL_LABELS == ("interview_invite", "assessment_deadline")
+    assert crit["interview_invite"] == {
+        "recall": 0.25,
+        "support": 4,
+        "missed": 3,
+        "missed_as": {"recruiter_outreach": 1, "other": 1, "(error)": 1},
+    }
+    assert crit["assessment_deadline"]["recall"] == 1.0
+    assert crit["assessment_deadline"]["missed_as"] == {}
+
+
+def test_critical_recall_is_undefined_without_support():
+    crit = critical_recall(confusion_matrix([_r("o", "other", "other")], LABELS))
+    assert crit["interview_invite"]["recall"] is None
+    assert crit["interview_invite"]["missed"] == 0
+
+
+# --- run: dev by default, tags in results ---------------------------------------
+
+
+def test_run_defaults_to_the_dev_split_and_records_tags(tmp_path):
+    args = _parse_args(["--results-dir", str(tmp_path)])
+
+    out_path, report = run(args, _fake_analyzer)
+
+    data = json.loads(out_path.read_text())
+    dev_ids = {i.id for i in select_split(load_dataset(DEFAULT_DATASET), "dev")}
+    assert {item["id"] for item in data["items"]} == dev_ids
+    assert data["run"]["split"] == "dev"
+    assert data["run"]["split_seed"] == SPLIT_SEED
+    assert {item["split"] for item in data["items"]} == {"dev"}
+    assert all(item["language"] and item["difficulty"] for item in data["items"])
+    assert set(data["summary"]["critical_recall"]) == set(CRITICAL_LABELS)
+    assert data["summary"]["slices_language"].keys() == {"en", "de", "mixed"}
+    assert "mixed=" in report
+
+
+def test_test_split_is_the_complement_of_dev(tmp_path):
+    dev = run(_parse_args(["--results-dir", str(tmp_path / "d")]), _fake_analyzer)[0]
+    test = run(
+        _parse_args(["--split", "test", "--results-dir", str(tmp_path / "t")]),
+        _fake_analyzer,
+    )[0]
+
+    dev_ids = {i["id"] for i in json.loads(dev.read_text())["items"]}
+    test_ids = {i["id"] for i in json.loads(test.read_text())["items"]}
+    assert dev_ids.isdisjoint(test_ids)
+    assert len(dev_ids | test_ids) == len(load_dataset(DEFAULT_DATASET))
+
+
+def test_split_flag_rejects_unknown_values():
+    with pytest.raises(SystemExit):
+        _parse_args(["--split", "train"])
+
+
+# --- Langfuse: one boolean `correct` score per email ----------------------------
+
+_SECRET_SUBJECT = "Confidential subject line"
+_SECRET_BODY = "Confidential body text with jane.doe@example.com"
+
+
+def _secret_item(label: EmailCategory = EmailCategory.OTHER) -> EvalItem:
+    return EvalItem.model_validate(
+        {
+            "id": "trace-01",
+            "subject": _SECRET_SUBJECT,
+            "body": _SECRET_BODY,
+            "sender": {"name": "Jane Doe", "email": "jane.doe@example.com"},
+            "label": label,
+            "language": "de",
+            "difficulty": "hard",
+        }
+    )
+
+
+def test_each_email_gets_a_boolean_correct_score_on_an_eval_tagged_trace(traces):
+    traces.start(processing_mode="test", trace_email_content=True)
+
+    right = evaluate_item_traced(_secret_item(EmailCategory.OTHER), _fake_analyzer, "dev")
+    wrong = evaluate_item_traced(_secret_item(EmailCategory.REJECTION), _fake_analyzer, "dev")
+
+    assert (right.correct, wrong.correct) == (True, False)
+    assert [(s["name"], s["value"], s["data_type"]) for s in traces.scores] == [
+        ("correct", 1.0, "BOOLEAN"),
+        ("correct", 0.0, "BOOLEAN"),
+    ]
+    root = traces.spans()[-1]
+    assert root.name == "eval_item"
+    assert list(root.attributes["langfuse.trace.tags"]) == ["eval"]
+    assert attribute(root, "langfuse.observation.metadata.split") == "dev"
+    assert attribute(root, "langfuse.observation.metadata.predicted") == "other"
+
+
+def test_a_failed_analysis_is_scored_incorrect(traces):
+    traces.start()
+
+    def broken(email):
+        raise RuntimeError("api down")
+
+    result = evaluate_item_traced(_secret_item(), broken, "dev")
+
+    assert result.error and not result.correct
+    assert traces.scores[0]["value"] == 0.0
+
+
+def test_eval_traces_carry_no_email_text(traces):
+    traces.start(processing_mode="live", trace_email_content=True)  # content stays off
+
+    evaluate_item_traced(_secret_item(), _fake_analyzer, "dev")
+
+    for span in traces.spans():
+        text = " ".join(str(v) for v in span.attributes.values())
+        for secret in (_SECRET_SUBJECT, _SECRET_BODY, "jane.doe@example.com", "Jane Doe"):
+            assert secret not in text
+
+
+def test_scoring_is_a_noop_with_tracing_off():
+    result = evaluate_item_traced(_secret_item(), _fake_analyzer, "dev")
+    assert result.predicted == "other"
+
+
+def test_main_shuts_tracing_down_even_when_the_run_fails(monkeypatch, tmp_path):
+    from eval import run as run_module
+
+    calls = []
+    monkeypatch.setattr(run_module, "shutdown_tracing", lambda: calls.append("shutdown"))
+    monkeypatch.setattr(
+        run_module, "run", lambda args, analyzer: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+
+    with pytest.raises(RuntimeError):
+        run_module.main(["--results-dir", str(tmp_path)])
+    assert calls == ["shutdown"]
+
+    monkeypatch.setattr(run_module, "run", lambda args, analyzer: (tmp_path / "x.json", "report"))
+    run_module.main(["--results-dir", str(tmp_path)])
+    assert calls == ["shutdown", "shutdown"]
