@@ -318,6 +318,43 @@ def test_inline_mode_triages_within_the_request_with_a_deadline(
     assert before < deadline <= time.monotonic() + INLINE_PROCESSING_TIMEOUT_SECONDS
 
 
+def test_inline_mode_sends_traces_before_responding(
+    client, inline, mock_triage, monkeypatch
+):
+    flush = MagicMock()
+    monkeypatch.setattr("app.api.events.flush_tracing", flush)
+    mock_triage.return_value = TriageOutcome.NO_ACTION
+
+    response = _signed_post(client, json.dumps(SAMPLE_EVENT).encode("utf-8"))
+
+    assert response.status_code == 200
+    flush.assert_called_once_with()
+
+
+def test_inline_mode_sends_traces_even_when_triage_failed(
+    client, inline, mock_triage, monkeypatch
+):
+    flush = MagicMock()
+    monkeypatch.setattr("app.api.events.flush_tracing", flush)
+    mock_triage.return_value = None  # run_triage_safely's "error" result
+
+    response = _signed_post(client, json.dumps(SAMPLE_EVENT).encode("utf-8"))
+
+    assert response.status_code == 200
+    flush.assert_called_once_with()
+
+
+def test_background_mode_does_not_flush_inside_the_request(
+    client, mock_triage, monkeypatch
+):
+    flush = MagicMock()
+    monkeypatch.setattr("app.api.events.flush_tracing", flush)
+
+    _signed_post(client, json.dumps(SAMPLE_EVENT).encode("utf-8"))
+
+    flush.assert_not_called()
+
+
 def test_inline_mode_does_not_schedule_a_background_task(
     client, inline, mock_triage, monkeypatch
 ):

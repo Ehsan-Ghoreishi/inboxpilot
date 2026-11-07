@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
 from app.database.repository import get_or_create_email
+from app.integrations.langfuse import shutdown_tracing
 from app.schemas.search import MAX_TOP_K, SearchRequest
 from app.services.embedding import Embedder, embed_email, get_embedder
 from app.services.search import retrieve_emails
@@ -403,6 +404,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
     finally:
         engine.dispose()
+        shutdown_tracing()
 
     print()
     print(report)

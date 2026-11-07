@@ -11,6 +11,12 @@ from app.api.events import router as events_router
 from app.api.health import router as health_router
 from app.api.search import router as search_router
 from app.config import Settings, get_settings
+from app.integrations.langfuse import (
+    content_tracing_allowed,
+    init_tracing,
+    shutdown_tracing,
+    tracing_requested,
+)
 from app.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -26,13 +32,28 @@ def log_safety_flags(settings: Settings) -> None:
         settings.dry_run,
         settings.process_events_inline,
     )
+    logger.info(
+        "Tracing: langfuse=%s email_content=%s",
+        "on" if tracing_requested(settings) else "off",
+        "on" if content_tracing_allowed(settings) else "redacted",
+    )
+    if settings.trace_email_content and not content_tracing_allowed(settings):
+        logger.warning(
+            "TRACE_EMAIL_CONTENT is ignored unless PROCESSING_MODE=test; "
+            "traces stay redacted"
+        )
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
-    log_safety_flags(get_settings())
-    yield
+    settings = get_settings()
+    log_safety_flags(settings)
+    init_tracing(settings)
+    try:
+        yield
+    finally:
+        shutdown_tracing()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

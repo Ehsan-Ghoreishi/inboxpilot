@@ -1,7 +1,7 @@
 """Unit tests for POST /ask auth and request validation — no database,
 no OpenAI."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -104,3 +104,24 @@ def test_to_search_request_carries_question_and_filters():
     search = request.to_search_request()
 
     assert (search.query, search.top_k, search.sender) == ("When?", 3, "acme")
+
+
+def test_answer_is_followed_by_a_trace_flush(client, mock_ask, monkeypatch):
+    flush = MagicMock()
+    monkeypatch.setattr("app.api.ask.flush_tracing", flush)
+
+    response = client.post("/ask", json={"question": "When?"}, headers=API_KEY)
+
+    assert response.status_code == 200
+    flush.assert_called_once_with()
+
+
+def test_failed_answer_still_flushes_traces(client, mock_ask, monkeypatch):
+    flush = MagicMock()
+    monkeypatch.setattr("app.api.ask.flush_tracing", flush)
+    mock_ask["ask"].side_effect = RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        client.post("/ask", json={"question": "When?"}, headers=API_KEY)
+
+    flush.assert_called_once_with()

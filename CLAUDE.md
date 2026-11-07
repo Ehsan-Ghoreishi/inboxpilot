@@ -62,3 +62,12 @@ docs/
 - Type hints everywhere.
 - Small functions.
 - Docstrings only where the behavior isn't obvious from the signature.
+
+## Working rules
+- Never run git commit, git push or git merge. The user commits.
+- Never print, log or write secret values. Never output the contents of .env or .env.prod.
+- Tests run only against the local Docker Postgres. Never run tests or scripts with prod env loaded.
+- No references to courses, weeks or classes in code, comments, commits, README or docs.
+- Keep PROCESSING_MODE=test and DRY_RUN=true as cloud defaults.
+- Every new environment variable goes into Settings, .env.example and the README config table.
+- Every behavior change gets tests. Finish with `uv run pytest -q` and `git diff --stat`.

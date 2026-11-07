@@ -24,6 +24,7 @@ from app.database.repository import (
     save_classification,
 )
 from app.database.session import session_scope
+from app.integrations.langfuse import annotate, run_flags, traced
 from app.integrations.nylas.mapper import nylas_payload_to_email
 from app.schemas.email import Email, EmailAnalysis, EmailCategory
 from app.services.actions import propose_action
@@ -63,6 +64,14 @@ def classify(email: Email) -> EmailAnalysis:
     return analyze(email)
 
 
+def _route_with_reason(
+    analysis: EmailAnalysis, settings: Settings
+) -> tuple[TriageStatus, str]:
+    if analysis.confidence < settings.confidence_threshold:
+        return TriageStatus.NEEDS_REVIEW, "confidence_threshold"
+    return _CATEGORY_TO_STATUS[analysis.category], "category_table"
+
+
 def route(analysis: EmailAnalysis, settings: Settings) -> TriageStatus:
     """Decide what should happen next with an already-classified email.
 
@@ -71,9 +80,7 @@ def route(analysis: EmailAnalysis, settings: Settings) -> TriageStatus:
     it's only used here as a relative signal for whether to trust the
     categorization at all, not treated as a precise likelihood.
     """
-    if analysis.confidence < settings.confidence_threshold:
-        return TriageStatus.NEEDS_REVIEW
-    return _CATEGORY_TO_STATUS[analysis.category]
+    return _route_with_reason(analysis, settings)[0]
 
 
 @dataclass(frozen=True)
@@ -94,6 +101,63 @@ class TriageOutcome(str, Enum):
     ACTION_PROPOSED = "action_proposed"
 
 
+@traced("triage")
+def _filter_step(email: Email, settings: Settings) -> bool:
+    allowed = should_process(email, settings)
+    annotate(
+        decided_by="sender_filter",
+        decision="process" if allowed else "skip",
+        **run_flags(settings),
+    )
+    return allowed
+
+
+@traced("classify")
+def _classify_step(
+    email: Email, settings: Settings, analyzer: Analyzer | None
+) -> AnalysisRun:
+    # Resolved at call time (not as a default argument) so tests can
+    # patch the module-level `analyze_with_metadata`.
+    run = (analyzer or analyze_with_metadata)(email)
+    annotate(
+        decided_by="llm",
+        category=run.analysis.category.value,
+        confidence=run.analysis.confidence,
+        model=run.model,
+        prompt_version=run.prompt_version,
+        **run_flags(settings),
+    )
+    return run
+
+
+@traced("propose_action")
+def _propose_step(
+    session: Session,
+    email_record_id: int,
+    email: Email,
+    analysis: EmailAnalysis,
+    status: TriageStatus,
+    decided_by: str,
+    settings: Settings,
+) -> TriageResult:
+    action_type = _STATUS_TO_ACTION_TYPE.get(status)
+    pending_action_id = None
+    if action_type is not None:
+        pending_action_id = propose_action(
+            session, email_record_id, email, analysis, action_type
+        ).id
+    annotate(
+        decided_by=decided_by,
+        category=analysis.category.value,
+        confidence=analysis.confidence,
+        status=status.value,
+        proposed=pending_action_id is not None,
+        pending_action_id=pending_action_id,
+        **run_flags(settings),
+    )
+    return TriageResult(analysis, status, pending_action_id)
+
+
 def _triage(
     session: Session,
     email_record_id: int,
@@ -103,13 +167,11 @@ def _triage(
 ) -> TriageResult | None:
     """Filter, classify, record, and propose at most one pending action,
     all in `session`. Returns `None` if the processing-mode filter skips it."""
-    if not should_process(email, settings):
+    if not _filter_step(email, settings):
         return None
 
-    # Resolved at call time (not as a default argument) so tests can
-    # patch the module-level `analyze_with_metadata`.
-    run = (analyzer or analyze_with_metadata)(email)
-    status = route(run.analysis, settings)
+    run = _classify_step(email, settings, analyzer)
+    status, decided_by = _route_with_reason(run.analysis, settings)
     save_classification(
         session,
         email_record_id,
@@ -121,14 +183,9 @@ def _triage(
         latency_ms=run.latency_ms,
         triage_status=status.value,
     )
-    action_type = _STATUS_TO_ACTION_TYPE.get(status)
-    if action_type is None:
-        return TriageResult(run.analysis, status, pending_action_id=None)
-
-    pending_action = propose_action(
-        session, email_record_id, email, run.analysis, action_type
+    return _propose_step(
+        session, email_record_id, email, run.analysis, status, decided_by, settings
     )
-    return TriageResult(run.analysis, status, pending_action_id=pending_action.id)
 
 
 def process_email(
@@ -144,6 +201,12 @@ def process_email(
     with session_scope() as session:
         email_record = get_or_create_email(session, email)
         return _triage(session, email_record.id, email, settings, analyzer)
+
+
+def is_message_event(payload: dict) -> bool:
+    """Whether a raw webhook payload is a `message.*` event (the only kind
+    that is triaged)."""
+    return str(payload.get("type", "")).startswith("message.")
 
 
 def process_raw_event(
@@ -162,7 +225,7 @@ def process_raw_event(
 
     Never calls Nylas: the email comes from the stored payload only.
     """
-    if not str(payload.get("type", "")).startswith("message."):
+    if not is_message_event(payload):
         return TriageOutcome.SKIPPED_TYPE
 
     email = nylas_payload_to_email(payload)

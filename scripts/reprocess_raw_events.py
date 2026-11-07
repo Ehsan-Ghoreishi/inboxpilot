@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.database.repository import list_unprocessed_raw_events  # noqa: E402
 from app.database.session import session_scope  # noqa: E402
+from app.integrations.langfuse import shutdown_tracing  # noqa: E402
 from app.logging_config import configure_logging  # noqa: E402
 from app.workflows.background import run_triage_safely  # noqa: E402
 
@@ -40,20 +41,7 @@ def _load_unprocessed(limit: int) -> list[tuple[str, dict]]:
         ]
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--limit",
-        type=_positive_int,
-        default=DEFAULT_LIMIT,
-        help=f"Process at most N events (default {DEFAULT_LIMIT}).",
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Only count unprocessed events."
-    )
-    args = parser.parse_args(argv)
-    configure_logging()
-
+def _run(args: argparse.Namespace) -> int:
     try:
         events = _load_unprocessed(args.limit)
     except Exception as exc:  # noqa: BLE001 - report and fail the run
@@ -71,6 +59,26 @@ def main(argv: list[str] | None = None) -> int:
     for outcome, count in sorted(counts.items()):
         print(f"{outcome}: {count}")
     return 1 if counts["error"] else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=DEFAULT_LIMIT,
+        help=f"Process at most N events (default {DEFAULT_LIMIT}).",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Only count unprocessed events."
+    )
+    args = parser.parse_args(argv)
+    configure_logging()
+    try:
+        return _run(args)
+    finally:
+        # A job exits right after this: send any spans still queued.
+        shutdown_tracing()
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ import random
 from functools import lru_cache
 from typing import Protocol
 
-from openai import OpenAI
+from langfuse.openai import OpenAI
 from sqlalchemy.orm import Session
 
 from app.config import get_settings

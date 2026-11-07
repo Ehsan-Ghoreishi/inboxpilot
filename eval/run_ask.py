@@ -39,6 +39,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.agents import email_qa
 from app.config import get_settings
+from app.integrations.langfuse import shutdown_tracing
 from app.schemas.ask import AskRequest
 from app.services.ask import INVALID_ANSWER, ask_question
 from app.services.embedding import Embedder, get_embedder
@@ -467,6 +468,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
     finally:
         engine.dispose()
+        shutdown_tracing()
 
     print()
     print(report)

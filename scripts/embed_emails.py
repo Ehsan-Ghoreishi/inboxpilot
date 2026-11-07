@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.database.models import EmailRecord  # noqa: E402
 from app.database.repository import list_email_ids_without_embedding  # noqa: E402
 from app.database.session import session_scope  # noqa: E402
+from app.integrations.langfuse import shutdown_tracing  # noqa: E402
 from app.services.embedding import Embedder, embed_email, get_embedder  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,10 @@ def backfill(embedder: Embedder) -> dict[str, int]:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    counts = backfill(get_embedder())
+    try:
+        counts = backfill(get_embedder())
+    finally:
+        shutdown_tracing()
     for name, count in counts.items():
         print(f"{name}: {count}")
 
