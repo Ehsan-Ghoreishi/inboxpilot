@@ -2,64 +2,229 @@
 
 [![CI](https://github.com/Ehsan-Ghoreishi/inboxpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Ehsan-Ghoreishi/inboxpilot/actions/workflows/ci.yml)
 
-An event-driven assistant that triages job-search email: it classifies
-each incoming message, extracts the facts that matter (company, role,
-deadline, urgency), and proposes a next step — a draft reply, a calendar
-event, or archiving — that only happens after a human approves it.
-Stored emails are embedded with pgvector, so the mailbox can be searched
-by meaning, not just keywords, and questions like "which companies asked
-for a take-home?" get an answer that cites the emails it came from.
+## Summary
 
-## Problem
+InboxPilot is an event-driven assistant that triages job-search email. A
+signed webhook delivers each message; an LLM classifies it (recruiter
+outreach, interview invite, assessment deadline, rejection, other),
+extracts company, role, deadline and urgency, and the system proposes at
+most one next step — a draft reply, a calendar event or archiving. Stored
+emails are also embedded with pgvector, so the mailbox can be searched by
+meaning and questions get an answer that cites its source emails or a
+refusal.
 
-During an active job search, the important emails (an interview slot to
-confirm, a take-home due Friday) arrive mixed in with recruiter spam,
-job alerts, and automated receipts. Missing one is costly; triaging all
-of them by hand is tedious. An LLM can do the sorting, but an LLM that
-can *act* on your mailbox is a liability: every email is
-attacker-controlled text, and a single prompt injection could send,
-delete, or forward mail. InboxPilot is built around that tension — the
-model reads and suggests; it never acts.
+What it does not do: **it never acts without human approval.** The model
+has no tools; it only produces structured output, and the only code that
+calls the email provider runs after someone approves a pending action.
+With `DRY_RUN=true`, even an approval makes no mailbox call (the action
+gets a fake `dry-run-<uuid>` id and its audit rows are flagged
+`dry_run`). It does not send, forward or delete mail.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    N[Nylas webhook] -->|"HMAC-SHA256 signed"| W["POST /events<br/>verify signature"]
-    W --> R[(raw_events)]
-    R -->|"background task"| M["mapper → canonical Email"]
-    M --> F{processing-mode<br/>filter}
-    F --> A["analyzer (OpenAI)<br/>structured output, no tools"]
-    A --> C[(classifications)]
-    A --> RT["route()<br/>category + confidence"]
-    RT -->|"at most one"| P[(pending_actions)]
-    P --> UI["GET / dashboard<br/>/actions API (X-API-Key)"]
-    UI -->|"human approves"| X["approve() → Nylas<br/>draft / event / archive"]
-    X --> L[(audit_log)]
-    A -->|"after triage commits"| E["embed (OpenAI)"]
-    E --> V[(email_embeddings<br/>pgvector HNSW)]
-    Q["POST /search (X-API-Key)"] --> V
-    K["POST /ask (X-API-Key)"] -->|"retrieve"| V
-    K -->|"answer from retrieved emails"| O["answerer (OpenAI)<br/>no tools"]
+    N[Nylas webhook] --> W["POST /events<br/>HMAC-SHA256 check"]
+    W --> R[("raw_events<br/>idempotent on event id")]
+    R --> M["mapper → canonical Email"]
+    M --> F{"sender filter<br/>(PROCESSING_MODE)"}
+    F --> A["classification<br/>OpenAI structured output"]
+    A --> P[("pending_actions<br/>at most one per thread + type")]
+    P --> H["human approval<br/>X-API-Key"]
+    H --> L[("audit_log")]
+    A -->|"after triage commits"| E["embeddings<br/>pgvector"]
+    E --> V[("email_embeddings")]
+    V --> S["/search<br/>X-API-Key"]
+    V --> K["/ask<br/>X-API-Key"]
+    K --> O["answer with citations,<br/>or refusal"]
 ```
 
-| Layer | Path | Responsibility |
+| Component | Path | Responsible for |
 |---|---|---|
-| API | `app/api/` | Webhook (`/events`), approval API (`/actions`), semantic search (`/search`), question answering (`/ask`), dashboard (`/`) |
-| Integrations | `app/integrations/nylas/`, `app/integrations/langfuse/` | Nylas: signature check, SDK client, payload → `Email` mapper, actions. Langfuse: tracing client, step helpers, email redaction |
-| Schemas | `app/schemas/` | Canonical `Email` / `EmailAnalysis`, API responses |
-| Agents | `app/agents/` | LLM classification/extraction; versioned prompts |
-| Workflows | `app/workflows/` | `process_email()`: filter → classify → route → propose |
-| Services | `app/services/` | Pending-action state machine (the only code that calls Nylas actions); embedding and search |
-| Database | `app/database/`, `alembic/` | SQLAlchemy models, repository functions, migrations |
+| Webhook | `app/api/events.py`, `app/integrations/nylas/` | Verifying the signature on the raw body, storing the raw event, mapping the Nylas payload to the canonical `Email` |
+| Triage workflow | `app/workflows/` | `process_email()`: filter → classify → route → propose |
+| Classifier | `app/agents/` | One structured-output OpenAI call, no tools; versioned prompts |
+| Routing and actions | `app/services/` | Deterministic `route()` from category and confidence; the pending-action state machine, the only code that calls Nylas actions |
+| Approval API | `app/api/actions.py`, `app/api/dashboard.py` | List, approve and reject pending actions; audit trail per action |
+| Retrieval and answers | `app/services/search.py`, `app/api/search.py`, `app/api/ask.py` | Embedding, cosine search with SQL filters, cited answers, refusal |
+| Persistence | `app/database/`, `alembic/` | SQLAlchemy models, repository functions, migrations |
+| Tracing | `app/integrations/langfuse/` | Langfuse client, step helpers, redaction |
 
-**Current state:** the webhook verifies and stores each raw event,
-returns 200, and then runs triage (mapper → filter → classify → route →
-propose) as a background task. Once triage commits, the email is
-embedded in a separate transaction, so an embedding failure never
-affects triage; `scripts/embed_emails.py` backfills anything missed.
+Triage runs as a background task locally and inside the request when
+`PROCESS_EVENTS_INLINE=true`. Embedding happens in a separate transaction
+after triage commits, so an embedding failure never affects triage;
+`scripts/embed_emails.py` backfills anything missed. The retrieval lane
+is described in detail under
+[Retrieval-augmented question answering](#retrieval-augmented-question-answering).
 
-## Quickstart
+## Demo
+
+`scripts/demo.py` walks a running service through the whole flow:
+liveness, a rejected bad signature, a signed interview email, the
+proposed action, approval (the audit log shows `dry_run`), an answerable
+`/ask` with its citation, and an unanswerable one that is refused. Each
+step prints its expectation and `PASS`/`FAIL`; the exit code is non-zero
+if any step fails.
+
+```sh
+WEBHOOK_SECRET=... APP_API_KEY=... \
+  uv run python -m scripts.demo --url https://<host> [--pause]
+```
+
+- Secrets are read only from the environment and never printed.
+  `--pause` waits for Enter between steps.
+- Point it only at a deployment with `DRY_RUN=true`: step 5 approves a
+  real pending action, and `DRY_RUN` is what keeps that from creating a
+  calendar event. With `PROCESSING_MODE=test`, set `TEST_EMAIL` to the
+  mailbox the service accepts so the demo email is processed.
+- Every run uses fresh `demo-` message and thread ids, so reruns don't
+  collide with the one-pending-action-per-thread rule. The demo email
+  and its pending action remain in the database afterwards.
+- It uses `GET /actions` and `GET /actions/{id}/audit`, both behind
+  `X-API-Key`.
+
+Traces of the same flow in Langfuse (email contents redacted):
+
+![Langfuse trace of one /ask call](docs/img/langfuse-ask-trace.png)
+
+*An `/ask` trace from a local evaluation run. Email bodies and model output are redacted by default; the trace shows model, latency, cost, tokens, `citations_valid` and `answerable`.*
+
+## Evaluation
+
+All data is synthetic (addresses on the reserved `.example` domain).
+Numbers below come from `docs/eval-report.md`, which
+`uv run python -m eval.report` regenerates from `eval/results/*.json`.
+Classification uses `gpt-4o` with prompt `analyze_v2`; 104 items split
+50/50 into dev and test.
+
+| | dev | test | dev + test |
+|---|---|---|---|
+| Items | 52 | 52 | 104 |
+| Accuracy (95% Wilson CI) | 0.981 (0.899–0.997) | 0.981 (0.899–0.997) | 0.981 (0.933–0.995) |
+| `interview_invite` recall (support) | 0.933 (15) | 1.000 (16) | 0.968 (31) |
+| `assessment_deadline` recall (support) | 1.000 (9) | 1.000 (8) | 1.000 (17) |
+| Cost per email | n/a | $0.008797 | n/a |
+
+Cost is only reported for the test run, the only one given token prices
+(`--input-usd-per-mtok`, `--output-usd-per-mtok`).
+
+Retrieval uses the 50-email base corpus and 25 questions (20 answerable,
+5 not); file `eval/results/retrieval-20261025T101312Z.json`. Question
+answering is reported from the latest run on the current 60-email corpus,
+`eval/results/ask-20261107T230456Z.json`:
+
+| Metric | Result |
+|---|---|
+| Retrieval recall@3 / recall@5 (n=20) | 0.925 / 0.950 |
+| Retrieval MRR (n=20) | 0.963 |
+| Ask: answerable questions answered, with valid citations | 20/20, 19/20 |
+| Ask: mean citation precision / recall | 0.967 / 0.950 |
+| Ask: unanswerable questions refused | 5/5 (1 by threshold, 4 by model) |
+| Ask: mean latency | 1403 ms |
+| Ask: estimated cost per question (computed) | ~$0.0033 |
+
+Citation recall is computed from the cited and expected ids stored in the
+ask file; it is not in that run's own summary. That run recorded no token
+prices, so the cost per question is a computed estimate, not a reported
+figure: the file's mean tokens (1183.4 input, 34.4 output) at the same
+prices as the classification report ($2.50 input, $10.00 output per
+million tokens). One answer in this run (`q-12`) cited the wrong emails.
+
+These results are encouraging but weak evidence. The data is synthetic and
+the sets are small, so every interval is wide and a single item moves a
+rate by about 2 points on the classification sets and 5 on the questions.
+Accuracy is near the ceiling, so it cannot rank prompt versions. There
+were two classification errors in 104 items: `hard-10` (dev), an email
+asking for availability for a screen, labeled `interview_invite` but
+predicted `recruiter_outreach` with confidence 0.95; and `oth-09-amb`
+(test), labeled `other` but predicted `recruiter_outreach` (0.85). The
+test split has been run once (one test results file exists). Citation validity
+varied between runs on the 50-email corpus (20/20, 19/20 and 19/20 answers
+with valid citations in the three runs of 25 October) because the model is
+nondeterministic; the latest run on the current 60-email corpus had 19/20.
+The 18/20 run of 25 October is excluded because it used an earlier
+60-email corpus, so its numbers are not comparable. Full tables, error analysis and limitations:
+[docs/eval-report.md](docs/eval-report.md).
+
+## Observability
+
+Each processed email and each `/ask` call is a Langfuse trace, with a
+span per step (`triage`, `classify` and its LLM generation,
+`propose_action`, `embed`; `retrieve` and the answer generation for
+`/ask`) carrying decisions, categories, confidence, model, token counts,
+cost and latency as metadata. Tracing is optional: without keys, or with
+`LANGFUSE_TRACING_ENABLED=false`, nothing is exported.
+
+Redaction rules:
+
+- Function arguments and return values are never captured; step metadata
+  contains no email text.
+- Email text and addresses reach Langfuse only when
+  `TRACE_EMAIL_CONTENT=true` **and** `PROCESSING_MODE=test`; startup logs
+  which mode is in effect.
+- Otherwise a span mask rewrites each span before export: addresses become
+  `[email]`, the `<untrusted_email>` block keeps only its length,
+  embedding inputs and model outputs become lengths, and exception text
+  becomes `[redacted]`.
+
+Details: [Observability](#observability-details).
+
+## Security model
+
+- **Webhook:** `POST /events` recomputes HMAC-SHA256 over the raw body
+  with `WEBHOOK_SECRET` and compares it to `X-Nylas-Signature` in constant
+  time before parsing; a mismatch is a 401 and nothing is stored.
+- **API key:** `/actions`, `/search` and `/ask` require `X-API-Key` equal
+  to `APP_API_KEY`, compared in constant time.
+- **Secrets:** `DATABASE_URL`, `OPENAI_API_KEY`, `WEBHOOK_SECRET` and
+  `APP_API_KEY` live in Secret Manager and are injected as environment
+  variables; no `.env*` file except `.env.example` enters the image.
+- **`DRY_RUN`:** the documented deployment sets `DRY_RUN=true`, so
+  approvals never call the email provider.
+- **One pending action per thread and type:** a partial unique index on
+  `pending_actions` rejects a second `pending` action of the same type for
+  a thread.
+- **Prompt injection:** emails are untrusted. The model has no tools and
+  its output is schema-validated; email text is wrapped in a delimited,
+  quoted `<untrusted_email>` block; the action type comes from `route()`,
+  never from the model's suggestion. In `/ask`, retrieved emails are
+  numbered and wrapped the same way, the prompt says to ignore
+  instructions inside them, and citations are checked server-side (valid
+  numbers, at least one) or the answer becomes a refusal.
+  See [Prompt-injection handling](#prompt-injection-handling).
+
+## Deployment
+
+Google Cloud, with every identifier a placeholder in
+[the deploy steps](#deploy) in [Deployment on Google Cloud](#deployment-on-google-cloud):
+
+- **Cloud Run service** `inboxpilot`: the FastAPI app, scaling to zero
+  (`--min-instances 0`), at most 2 instances.
+- **Cloud Run job** `inboxpilot-reprocess`: the same image running
+  `python -m scripts.reprocess_raw_events`, which triages stored raw
+  events that have no email yet.
+- **Cloud Scheduler** starts the job every 15 minutes.
+- Postgres with pgvector on Supabase through the session pooler.
+
+## Limitations and next steps
+
+- **No real mailbox is connected.** The webhook is exercised with signed
+  synthetic events (`scripts/send_fake_event.py`, `scripts/demo.py`).
+- **Evaluation data is synthetic**, small; the retrieval questions and labels were drafted with an AI
+  assistant and not independently reviewed.
+- **Single user**: one `APP_API_KEY`, one mailbox.
+- **No dedicated approval UI.** Approvals go through the `/actions` API or
+  the minimal dashboard at `/`, which is itself unauthenticated and lists
+  sender addresses and subjects.
+
+Next steps: evaluate on anonymized real email, build an approval UI, and
+connect a real Nylas grant on a dedicated test mailbox.
+
+---
+
+# Reference
+
+## Quick start
 
 Requires [uv](https://docs.astral.sh/uv/) and Docker. First fill in
 `.env` (`cp .env.example .env`); for the local database use
@@ -101,32 +266,16 @@ env -i HOME="$HOME" PATH="$PATH" CI=true \
 Or run the workflow itself in Docker with [act](https://github.com/nektos/act):
 `act pull_request` (stop the Compose `db` first — both bind port 5432).
 
-## Demo
+## Problem
 
-`scripts/demo.py` walks a running service through the whole flow for a
-live presentation: liveness, a rejected bad signature, a signed
-interview email, the proposed action, approval (audit log shows
-`dry_run`), an answerable `/ask` with its citation, and an unanswerable
-one that is refused. Each step prints its expectation and `PASS`/`FAIL`;
-the exit code is non-zero if any step fails.
-
-```sh
-WEBHOOK_SECRET=... APP_API_KEY=... \
-  uv run python -m scripts.demo --url https://<host> [--pause]
-```
-
-- Secrets are read only from the environment and never printed.
-  `--pause` waits for Enter between steps.
-- Point it only at a deployment with `DRY_RUN=true`: step 5 approves a
-  real pending action, and `DRY_RUN` is what keeps that from creating a
-  calendar event. With `PROCESSING_MODE=test`, set `TEST_EMAIL` to the
-  mailbox the service accepts so the demo email is processed.
-- Every run uses fresh `demo-` message and thread ids, so reruns don't
-  collide with the one-pending-action-per-thread rule. The demo email
-  and its pending action remain in the database afterwards.
-- It uses `GET /actions` (which includes each action's `message_id`,
-  `category` and `confidence`) and `GET /actions/{id}/audit`, both behind
-  `X-API-Key`.
+During an active job search, the important emails (an interview slot to
+confirm, a take-home due Friday) arrive mixed in with recruiter spam,
+job alerts, and automated receipts. Missing one is costly; triaging all
+of them by hand is tedious. An LLM can do the sorting, but an LLM that
+can *act* on your mailbox is a liability: every email is
+attacker-controlled text, and a single prompt injection could send,
+delete, or forward mail. InboxPilot is built around that tension — the
+model reads and suggests; it never acts.
 
 ## Offline development
 
@@ -192,7 +341,7 @@ secret:
 `WEBHOOK_SECRET=... uv run python scripts/send_fake_event.py --url https://<service-url>`
 (`/events` is appended to a bare base URL).
 
-## Deployment
+## Deployment on Google Cloud
 
 How the image above runs on Google Cloud. Every identifier below
 (`PROJECT_ID`, `REGION`, `SERVICE_ACCOUNT`, `SERVICE_URL`) is a
@@ -364,7 +513,7 @@ Connection budget with these values: 2 service instances x (5 + 0) plus
 one job run x (2 + 0) = 12 connections, under the session pooler's 15.
 Raising `--max-instances` or the pool sizes needs that sum rechecked.
 
-### Security model
+### Security model (deployment)
 
 - **Webhook:** `POST /events` recomputes HMAC-SHA256 of the exact raw
   body with `WEBHOOK_SECRET` and compares it to `X-Nylas-Signature` in
@@ -766,7 +915,7 @@ flag does the rest; the ask eval above measures that combination.
   corpus loaded directly into the database; neither eval has been run
   against a real Nylas mailbox.
 
-## Observability
+## Observability details
 
 InboxPilot sends traces to [Langfuse](https://langfuse.com) so each
 email and each question can be inspected step by step: what decided,
@@ -849,7 +998,7 @@ Run, keep the secret key in Secret Manager like the other secrets.
 - Retrieval and question-answering limitations are listed under
   [RAG limitations](#rag-limitations).
 
-## Evaluation
+## Evaluation details
 
 ### Classification and time extraction
 
