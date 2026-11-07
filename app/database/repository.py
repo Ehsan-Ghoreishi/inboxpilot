@@ -196,6 +196,16 @@ def write_audit_log(
     return entry
 
 
+def list_audit_log(session: Session, pending_action_id: int) -> list[AuditLog]:
+    return list(
+        session.scalars(
+            select(AuditLog)
+            .where(AuditLog.pending_action_id == pending_action_id)
+            .order_by(AuditLog.at, AuditLog.id)
+        )
+    )
+
+
 def list_pending_actions(
     session: Session, status: PendingActionStatus
 ) -> list[PendingAction]:

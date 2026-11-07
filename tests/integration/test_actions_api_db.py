@@ -83,6 +83,59 @@ def test_list_pending_actions(client):
     assert [a["id"] for a in response.json()["actions"]] == [pending_action.id]
 
 
+def test_list_pending_actions_includes_message_id_and_classification(client):
+    email = _email()
+    pending_action = create_pending_action(email, _analysis(), ActionType.ARCHIVE)
+    with session_scope() as session:
+        record = get_or_create_email(session, email)
+        save_classification(
+            session, record.id, _analysis(), model="gpt-test", prompt_version="v1"
+        )
+
+    [action] = client.get("/actions", headers=API_KEY).json()["actions"]
+
+    assert action["id"] == pending_action.id
+    assert action["message_id"] == "msg-1"
+    assert action["category"] == "other"
+    assert action["confidence"] == 0.9
+
+
+def test_list_pending_actions_without_classification_has_null_fields(client):
+    create_pending_action(_email(), _analysis(), ActionType.ARCHIVE)
+
+    [action] = client.get("/actions", headers=API_KEY).json()["actions"]
+
+    assert action["category"] is None
+    assert action["confidence"] is None
+
+
+@pytest.mark.parametrize("dry", ["true", "false"])
+def test_audit_endpoint_returns_the_trail_with_dry_run_flags(
+    client, app_db_env, monkeypatch, dry
+):
+    monkeypatch.setenv("DRY_RUN", dry)
+    get_settings.cache_clear()
+    pending_action = create_pending_action(_email(), _analysis(), ActionType.ARCHIVE)
+
+    with patch("app.services.actions.archive_message"):
+        client.post(f"/actions/{pending_action.id}/approve", headers=API_KEY)
+    response = client.get(f"/actions/{pending_action.id}/audit", headers=API_KEY)
+
+    assert response.status_code == 200
+    entries = response.json()["entries"]
+    assert [(e["actor"], e["action"], e["dry_run"]) for e in entries] == [
+        ("system", "created", False),
+        ("human", "approved", dry == "true"),
+        ("human", "executed", dry == "true"),
+    ]
+
+
+def test_audit_endpoint_for_unknown_action_is_404(client):
+    response = client.get("/actions/999/audit", headers=API_KEY)
+
+    assert response.status_code == 404
+
+
 def test_approve_once_then_second_approve_is_409(client):
     pending_action = create_pending_action(_email(), _analysis(), ActionType.ARCHIVE)
 
