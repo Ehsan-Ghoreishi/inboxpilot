@@ -1,6 +1,7 @@
 # InboxPilot
 
 [![CI](https://github.com/Ehsan-Ghoreishi/inboxpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Ehsan-Ghoreishi/inboxpilot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Summary
 
@@ -23,8 +24,11 @@ gets a fake `dry-run-<uuid>` id and its audit rows are flagged
 ## Status
 
 The project is complete as a portfolio project. It has been verified end to
-end on Cloud Run with synthetic data. No real mailbox is connected, and
-`DRY_RUN` is the default. Results of the latest evaluation are in
+end on Cloud Run with synthetic data. The Cloud Run deployment was
+verified end to end with synthetic data and has since been shut down; the
+system runs locally with the commands in [Quick start](#quick-start) and
+[Demo](#demo). No real mailbox is connected, and `DRY_RUN` is the
+default. Results of the latest evaluation are in
 [docs/eval-report.md](docs/eval-report.md).
 
 Before any real data is used:
@@ -72,7 +76,9 @@ is described in detail under
 
 ## Demo
 
-`scripts/demo.py` walks a running service through the whole flow:
+`scripts/demo.py` walks a running service through the whole flow. It was
+run against the Cloud Run deployment while it was up; it works the same
+against a local service (see Quick start):
 liveness, a rejected bad signature, a signed interview email, the
 proposed action, approval (the audit log shows `dry_run`), an answerable
 `/ask` with its citation, and an unanswerable one that is refused. Each
@@ -81,8 +87,11 @@ if any step fails.
 
 ```sh
 WEBHOOK_SECRET=... APP_API_KEY=... \
-  uv run python -m scripts.demo --url https://<host> [--pause]
+  uv run python -m scripts.demo --url http://localhost:8000 [--pause]
 ```
+
+`--url` takes any base URL of a running service; the local one above is
+the supported way to run it now.
 
 - Secrets are read only from the environment and never printed.
   `--pause` waits for Enter between steps.
@@ -208,7 +217,8 @@ Details: [Observability](#observability-details).
 
 ## Deployment
 
-Google Cloud, with every identifier a placeholder in
+This section describes the deployment that was verified; it is no longer
+running. Google Cloud, with every identifier a placeholder in
 [the deploy steps](#deploy) in [Deployment on Google Cloud](#deployment-on-google-cloud):
 
 - **Cloud Run service** `inboxpilot`: the FastAPI app, scaling to zero
@@ -356,7 +366,9 @@ secret:
 
 ## Deployment on Google Cloud
 
-How the image above runs on Google Cloud. Every identifier below
+How the image above ran on Google Cloud when it was verified; the
+deployment has since been shut down, and these steps are kept as a record
+and as instructions for redeploying. Every identifier below
 (`PROJECT_ID`, `REGION`, `SERVICE_ACCOUNT`, `SERVICE_URL`) is a
 placeholder.
 
