@@ -20,6 +20,19 @@ With `DRY_RUN=true`, even an approval makes no mailbox call (the action
 gets a fake `dry-run-<uuid>` id and its audit rows are flagged
 `dry_run`). It does not send, forward or delete mail.
 
+## Status
+
+The project is complete as a portfolio project. It has been verified end to
+end on Cloud Run with synthetic data. No real mailbox is connected, and
+`DRY_RUN` is the default. Results of the latest evaluation are in
+[docs/eval-report.md](docs/eval-report.md).
+
+Before any real data is used:
+
+1. Rotate the database credentials.
+2. Turn off content tracing.
+3. Add authentication to the dashboard.
+
 ## Architecture
 
 ```mermaid
